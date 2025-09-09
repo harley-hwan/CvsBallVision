@@ -14,9 +14,9 @@
 #include <vector>
 #include <mutex>
 #include <atomic>
-#include "C:\Program Files\CREVIS\cvsCam\Includes\cvsCamCtrl.h"
+#include "cvsCamCtrl.h"
 
-#pragma comment(lib, "C:\Program Files\CREVIS\cvsCam\Libraries\cvsCamCtrl.lib")
+#pragma comment(lib, "cvsCamCtrl.lib")
 
 namespace CvsBallVision {
 

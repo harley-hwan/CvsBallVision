@@ -116,13 +116,13 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;CVSBALLVISIONCORE_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(CVSCAM_ROOT)/Includes;C:\Dev\opencv\build\include;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Dev\CREVIS\cvsCam\Includes;C:\Dev\opencv\build\include;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>$(CVSCAM_ROOT)/Libraries;C:\Dev\opencv\build\x64\vc16\lib;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\lib\intel64\vc14</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>C:\Dev\CREVIS\cvsCam\Libraries;C:\Dev\opencv\build\x64\vc16\lib;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\lib\intel64\vc14</AdditionalLibraryDirectories>
       <AdditionalDependencies>opencv_world4120d.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
@@ -134,13 +134,13 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;CVSBALLVISIONCORE_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(CVSCAM_ROOT)/Includes;C:\Dev\opencv\build\include;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Dev\CREVIS\cvsCam\Includes;C:\Dev\opencv\build\include;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalLibraryDirectories>$(CVSCAM_ROOT)/Libraries;C:\Dev\opencv\build\x64\vc16\lib;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\lib\intel64\vc14</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>C:\Dev\CREVIS\cvsCam\Libraries;C:\Dev\opencv\build\x64\vc16\lib;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\lib\intel64\vc14</AdditionalLibraryDirectories>
       <AdditionalDependencies>opencv_world4120.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
