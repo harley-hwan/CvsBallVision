@@ -117,13 +117,14 @@
       <PreprocessorDefinitions>_DEBUG;CVSBALLVISIONCORE_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>C:\Dev\CREVIS\cvsCam\Includes;C:\Dev\opencv\build\include;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\include</AdditionalIncludeDirectories>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
       <AdditionalLibraryDirectories>C:\Dev\CREVIS\cvsCam\Libraries;C:\Dev\opencv\build\x64\vc16\lib;C:\Dev\oneTBB\oneapi-tbb-2022.2.0\lib\intel64\vc14</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opencv_world4120d.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>cvsCamCtrl.lib;opencv_world4120d.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

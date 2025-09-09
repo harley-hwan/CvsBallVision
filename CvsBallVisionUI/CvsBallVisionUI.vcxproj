@@ -193,7 +193,8 @@
       <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PostBuildEvent>
-      <Command>xcopy "$(SolutionDir)$(Platform)\$(Configuration)\CvsBallVisionCore.dll" "$(TargetDir)" /Y</Command>
+      <Command>xcopy /y /d "$(OutDir)$(TargetName).dll" "$(SolutionDir)$(Platform)\$(Configuration)\"
+xcopy /y /d "$(OutDir)$(TargetName).lib" "$(SolutionDir)$(Platform)\$(Configuration)\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
