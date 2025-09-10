@@ -1,0 +1,54 @@
+주요특징
+
+MG-A160K-72 TECHNICAL DATA
+
+Sensor:	Sony CMOS Pregius IMX273
+Sensor size:		1/2.9"
+Pixel size (㎛):	3.45 x 3.45
+Resolution:	1456 x 1088
+Frame Rate (Max.):	72 fps
+Color / Mono:	Color
+Scanning method:	Full / ROI / Reverse(X,Y,All) / Decimation (Horizontal+Vertical ) / Binning (Horizontal+Vertical) (Mono Model Only)
+Synchronization:	Internal (Freerun), External, Software trigger via PC
+Trigger mode:	Fixed shutter, Pulse width shutter
+Shutter:	Global
+Shutter Speed:	1us ~ 3sec (Exposure Offset : 별도)
+Gain	Analog:	0dB ~ 32dB (1x ~ 39.8x)
+Digital:	0dB ~ 24dB (1x ~ 16x)
+Black level	Analog:	0~4095 (12bit) / Digital : 0~4095 (12bit)
+Gamma / LUT:	Gamma / LUT Correction (0~3.999), Adjustable LUT (12bit to 12bit)
+Auto white balance:	Off / Once / Continuous (Only Color Models)
+Auto gain / exposure:	Off / Once / Continuous
+Interface:	Ethernet 1000 Base-T (GigE Vision Standard)
+Pixel Data Format:	Mono8/10/12, Mono10/12 Packed, Bayer8/10/12, Bayer10/12 Packed, YUV422 Packed
+Minimum illumination:	1.0 lx, F1.4, Gain MAX, without IR cut filter
+SNR:	36dB
+Function control:	GainAuto, ExposureAuto, alanceWhiteAuto(Only Color Models), Acquisition Frame Rate(Adjustable), Line Debouncer, Color transformation Control, Noise Reduction Filter
+Lens mount:	C mount
+Power requirements:	12VDC ± 10%, PoE (Power over Ethernet 802.3af compliant)
+Consumption (DC):	< 3.1W
+Consumption (POE):	< 3.6W
+Weight:	< 60g
+Dimension:	29 x 29 x 40 mm (without mount)
+Temperature:	0℃ ~ 40℃ (Operating) / -10℃ ~ 50℃ (with <20~80% RH) (Storage)
+Vibration / Shock:	98m/s2 (10G) / 196m/s2 (20.0G)
+Standard compliancy:	CE (EN61326-1;2006년; Class A)
+Environments:	RoHS, WEEE
+
+
+MG-A160-72 ROI별 fps.
+  
+Width	Height	FPS
+1024	960	115.93
+1024	980	113.05
+1024	1024	108.39
+1200	900	105.41
+1200	920	103.22
+1200	940	100.74
+1200	960	98.73
+1240	900	101.71
+1240	920	99.59
+1240	940	97.57
+1280	880	100.83
+1280	900	98.69
+1280	960	92.45

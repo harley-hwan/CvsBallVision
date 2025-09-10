@@ -1,0 +1,12 @@
+(CvsBallVision 솔루션 코드 구조)
+CvsBallVision 솔루션
+	CvsBallVisionCore 프로젝트 (DLL)
+		- CvsBallVisionCore.h
+		- CvsBallVisionCore.cpp
+		- pch.h (사용 x)
+	CvsBallVisionUI 프로젝트 (MFC)
+		- CvsBallVisionUI.h
+		- CvsBallVisionUI.cpp
+		- Resource.h
+		- CvsBallVisionUI.rc
+		- pch.h (사용 o)
