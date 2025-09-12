@@ -64,7 +64,7 @@ private:
     int m_imageHeight;
     size_t m_displayBufferSize;
     std::atomic<bool> m_bImageUpdated;
-    std::atomic<bool> m_bShuttingDown;  // 추가: 종료 플래그
+    std::atomic<bool> m_bShuttingDown;
 
     // Statistics
     uint64_t m_frameCount;
@@ -108,6 +108,7 @@ private:
 
     // Private methods
     void InitializeCamera();
+    void ShutdownCamera();  // 추가: 안전한 종료 시퀀스
     void UpdateCameraList();
     void UpdateUIState();
     void UpdateStatistics();

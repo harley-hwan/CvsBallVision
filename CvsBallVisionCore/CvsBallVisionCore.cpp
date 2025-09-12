@@ -90,7 +90,43 @@ namespace CvsBallVision
         bool WasRegistered() const { return m_wasRegistered; }
     };
 
-    // Image buffer pool for zero-copy optimization
+    // Resolution change transaction for safe rollback
+    class ResolutionTransaction
+    {
+    private:
+        int32_t m_hDevice;
+        int m_oldWidth;
+        int m_oldHeight;
+        bool m_committed;
+        bool m_needsRollback;
+
+    public:
+        ResolutionTransaction(int32_t hDevice, int oldWidth, int oldHeight)
+            : m_hDevice(hDevice)
+            , m_oldWidth(oldWidth)
+            , m_oldHeight(oldHeight)
+            , m_committed(false)
+            , m_needsRollback(false)
+        {
+        }
+
+        ~ResolutionTransaction()
+        {
+            if (!m_committed && m_needsRollback)
+            {
+                // Rollback resolution changes
+                ST_SetIntReg(m_hDevice, "Width", m_oldWidth);
+                ST_SetIntReg(m_hDevice, "Height", m_oldHeight);
+            }
+        }
+
+        void EnableRollback() { m_needsRollback = true; }
+        void Commit() { m_committed = true; }
+        int GetOldWidth() const { return m_oldWidth; }
+        int GetOldHeight() const { return m_oldHeight; }
+    };
+
+    // Optimized image buffer pool for zero-copy and real-time performance
     class ImageBufferPool
     {
     private:
@@ -99,7 +135,6 @@ namespace CvsBallVision
             CVS_BUFFER buffer;
             std::atomic<bool> inUse;
             uint64_t lastUsed;
-            std::mutex bufferMutex;
 
             BufferInfo() : inUse(false), lastUsed(0)
             {
@@ -111,39 +146,76 @@ namespace CvsBallVision
         std::mutex m_poolMutex;
         int32_t m_hDevice;
         size_t m_maxBuffers;
+        std::atomic<bool> m_shuttingDown;
 
     public:
         ImageBufferPool(int32_t hDevice, size_t maxBuffers = 3)
             : m_hDevice(hDevice)
             , m_maxBuffers(maxBuffers)
+            , m_shuttingDown(false)
         {
+            // Pre-allocate buffers for better real-time performance
+            PreallocateBuffers();
         }
 
         ~ImageBufferPool()
         {
+            m_shuttingDown = true;
+            WaitForAllBuffersReturned();
             Clear();
+        }
+
+        void PreallocateBuffers()
+        {
+            std::lock_guard<std::mutex> lock(m_poolMutex);
+            m_buffers.reserve(m_maxBuffers);
+
+            // Pre-create initial buffers
+            for (size_t i = 0; i < 2 && i < m_maxBuffers; ++i)
+            {
+                auto bufInfo = std::make_unique<BufferInfo>();
+                CVS_ERROR status = ST_InitBuffer(m_hDevice, &bufInfo->buffer);
+                if (status == MCAM_ERR_OK)
+                {
+                    m_buffers.push_back(std::move(bufInfo));
+                }
+            }
         }
 
         CVS_BUFFER* GetBuffer()
         {
-            std::lock_guard<std::mutex> lock(m_poolMutex);
+            if (m_shuttingDown)
+                return nullptr;
 
-            // Find available buffer
+            // Try to get buffer without locking first (lock-free fast path)
             for (auto& bufInfo : m_buffers)
             {
                 bool expected = false;
-                if (bufInfo->inUse.compare_exchange_strong(expected, true))
+                if (bufInfo->inUse.compare_exchange_strong(expected, true,
+                    std::memory_order_acquire, std::memory_order_relaxed))
                 {
-                    std::lock_guard<std::mutex> bufLock(bufInfo->bufferMutex);
+                    return &bufInfo->buffer;
+                }
+            }
+
+            // Need to create new buffer
+            std::lock_guard<std::mutex> lock(m_poolMutex);
+
+            // Double-check after acquiring lock
+            for (auto& bufInfo : m_buffers)
+            {
+                bool expected = false;
+                if (bufInfo->inUse.compare_exchange_strong(expected, true,
+                    std::memory_order_acquire, std::memory_order_relaxed))
+                {
                     return &bufInfo->buffer;
                 }
             }
 
             // Create new buffer if under limit
-            if (m_buffers.size() < m_maxBuffers)
+            if (m_buffers.size() < m_maxBuffers && !m_shuttingDown)
             {
                 auto bufInfo = std::make_unique<BufferInfo>();
-
                 CVS_ERROR status = ST_InitBuffer(m_hDevice, &bufInfo->buffer);
                 if (status == MCAM_ERR_OK)
                 {
@@ -161,13 +233,11 @@ namespace CvsBallVision
         {
             if (!pBuffer) return;
 
-            std::lock_guard<std::mutex> lock(m_poolMutex);
             for (auto& bufInfo : m_buffers)
             {
                 if (&bufInfo->buffer == pBuffer)
                 {
-                    std::lock_guard<std::mutex> bufLock(bufInfo->bufferMutex);
-                    bufInfo->inUse = false;
+                    bufInfo->inUse.store(false, std::memory_order_release);
                     bufInfo->lastUsed = std::chrono::steady_clock::now().time_since_epoch().count();
                     break;
                 }
@@ -176,12 +246,29 @@ namespace CvsBallVision
 
         void ResetBuffers()
         {
-            std::lock_guard<std::mutex> lock(m_poolMutex);
             for (auto& bufInfo : m_buffers)
             {
-                std::lock_guard<std::mutex> bufLock(bufInfo->bufferMutex);
-                bufInfo->inUse = false;
+                bufInfo->inUse.store(false, std::memory_order_release);
                 bufInfo->lastUsed = 0;
+            }
+        }
+
+        void WaitForAllBuffersReturned()
+        {
+            auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (std::chrono::steady_clock::now() < timeout)
+            {
+                bool allReturned = true;
+                for (auto& bufInfo : m_buffers)
+                {
+                    if (bufInfo->inUse.load(std::memory_order_acquire))
+                    {
+                        allReturned = false;
+                        break;
+                    }
+                }
+                if (allReturned) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         }
 
@@ -190,7 +277,13 @@ namespace CvsBallVision
             std::lock_guard<std::mutex> lock(m_poolMutex);
             for (auto& bufInfo : m_buffers)
             {
-                std::lock_guard<std::mutex> bufLock(bufInfo->bufferMutex);
+                // Wait for buffer to be released
+                int retries = 10;
+                while (bufInfo->inUse.load(std::memory_order_acquire) && retries-- > 0)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+
                 if (bufInfo->buffer.image.pImage)
                 {
                     ST_FreeBuffer(&bufInfo->buffer);
@@ -201,7 +294,10 @@ namespace CvsBallVision
 
         void Reinitialize()
         {
+            m_shuttingDown = false;
+            WaitForAllBuffersReturned();
             Clear();
+            PreallocateBuffers();
         }
     };
 
@@ -221,12 +317,14 @@ namespace CvsBallVision
         std::atomic<bool> m_bConnected;
         std::atomic<bool> m_bAcquiring;
         std::atomic<bool> m_bCallbackRegistered;
+        std::atomic<bool> m_bShuttingDown;
 
         // Optimized buffer management
         std::unique_ptr<ImageBufferPool> m_bufferPool;
         CVS_BUFFER* m_pCurrentBuffer;
         CVS_BUFFER m_rgbBuffer;
         std::mutex m_imageMutex;
+        std::mutex m_callbackMutex;
 
         ImageCallback m_imageCallback;
         ErrorCallback m_errorCallback;
@@ -267,6 +365,7 @@ namespace CvsBallVision
         std::string FindGainNodeName();
         bool ReinitializeBuffers();
         bool SetResolutionOptimized(int width, int height);
+        bool ValidateBufferSize(const CVS_BUFFER* pSrc, const CVS_BUFFER* pDst);
     };
 
     CameraController::Impl::Impl()
@@ -275,6 +374,7 @@ namespace CvsBallVision
         , m_bConnected(false)
         , m_bAcquiring(false)
         , m_bCallbackRegistered(false)
+        , m_bShuttingDown(false)
         , m_bStopGrabThread(false)
         , m_frameCount(0)
         , m_errorCount(0)
@@ -295,19 +395,34 @@ namespace CvsBallVision
 
     CameraController::Impl::~Impl()
     {
+        m_bShuttingDown = true;
+
+        // Stop acquisition first
         if (m_bAcquiring)
         {
+            m_bAcquiring = false;
             ST_AcqStop(m_hDevice);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // Clear callbacks
+        {
+            std::lock_guard<std::mutex> lock(m_callbackMutex);
+            m_imageCallback = nullptr;
+            m_errorCallback = nullptr;
+            m_statusCallback = nullptr;
         }
 
         if (m_bCallbackRegistered)
         {
             ST_UnregisterGrabCallback(m_hDevice, EVENT_NEW_IMAGE);
+            m_bCallbackRegistered = false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
         if (m_bufferPool)
         {
-            m_bufferPool->Clear();
+            m_bufferPool.reset();
         }
 
         if (m_rgbBuffer.image.pImage)
@@ -324,6 +439,23 @@ namespace CvsBallVision
         {
             ST_FreeSystem();
         }
+    }
+
+    bool CameraController::Impl::ValidateBufferSize(const CVS_BUFFER* pSrc, const CVS_BUFFER* pDst)
+    {
+        if (!pSrc || !pDst || !pSrc->image.pImage || !pDst->image.pImage)
+            return false;
+
+        size_t srcSize = pSrc->image.width * pSrc->image.height * pSrc->image.channels;
+        size_t dstSize = pDst->image.width * pDst->image.height * pDst->image.channels;
+
+        // For Bayer to RGB conversion, destination needs 3x the source size
+        if (pSrc->image.channels == 1 && pDst->image.channels == 3)
+        {
+            return (dstSize >= srcSize * 3);
+        }
+
+        return (dstSize >= srcSize);
     }
 
     bool CameraController::Impl::ReinitializeBuffers()
@@ -350,12 +482,33 @@ namespace CvsBallVision
 
         if (IsColorCamera())
         {
-            // RGB 버퍼는 3채널로 초기화
+            // RGB buffer initialization with size validation
             CVS_ERROR status = ST_InitBuffer(m_hDevice, &m_rgbBuffer, 3);
             if (status != MCAM_ERR_OK)
             {
                 ReportError(status, "Failed to reinitialize RGB buffer");
-                // Not critical, continue
+                return false;
+            }
+
+            // Verify buffer size matches current resolution
+            if (m_rgbBuffer.image.width != m_currentWidth ||
+                m_rgbBuffer.image.height != m_currentHeight)
+            {
+                // Resize buffer to match current resolution
+                ST_FreeBuffer(&m_rgbBuffer);
+                memset(&m_rgbBuffer, 0, sizeof(m_rgbBuffer));
+
+                // Try to initialize with specific size
+                m_rgbBuffer.image.width = m_currentWidth;
+                m_rgbBuffer.image.height = m_currentHeight;
+                m_rgbBuffer.image.channels = 3;
+                status = ST_InitBuffer(m_hDevice, &m_rgbBuffer, 3);
+
+                if (status != MCAM_ERR_OK)
+                {
+                    ReportError(status, "Failed to initialize RGB buffer with specific size");
+                    return false;
+                }
             }
         }
 
@@ -374,13 +527,13 @@ namespace CvsBallVision
             return true;
         }
 
+        // Create transaction for safe rollback
+        ResolutionTransaction transaction(m_hDevice, m_currentWidth, m_currentHeight);
+
         // Use RAII guards for safe state management
         AcquisitionGuard acqGuard(m_hDevice, &m_bAcquiring);
-        CallbackGuard callbackGuard(m_hDevice, &m_bCallbackRegistered, StaticGrabCallback, this);
-
-        // Store original values for rollback
-        int originalWidth = m_currentWidth;
-        int originalHeight = m_currentHeight;
+        CallbackGuard callbackGuard(m_hDevice, &m_bCallbackRegistered,
+            StaticGrabCallback, this);
 
         // Set new resolution
         CVS_ERROR status = ST_SetIntReg(m_hDevice, "Width", width);
@@ -390,12 +543,13 @@ namespace CvsBallVision
             return false;
         }
 
+        transaction.EnableRollback();
+
         status = ST_SetIntReg(m_hDevice, "Height", height);
         if (status != MCAM_ERR_OK)
         {
-            // Rollback width change
-            ST_SetIntReg(m_hDevice, "Width", originalWidth);
             ReportError(status, "Failed to set height");
+            // Transaction destructor will handle rollback
             return false;
         }
 
@@ -406,16 +560,17 @@ namespace CvsBallVision
         // Reinitialize buffers
         if (!ReinitializeBuffers())
         {
-            // Rollback resolution changes
-            ST_SetIntReg(m_hDevice, "Width", originalWidth);
-            ST_SetIntReg(m_hDevice, "Height", originalHeight);
-            m_currentWidth = originalWidth;
-            m_currentHeight = originalHeight;
-            ReinitializeBuffers();
+            // Restore original resolution
+            m_currentWidth = transaction.GetOldWidth();
+            m_currentHeight = transaction.GetOldHeight();
 
-            ReportError(-1, "Failed to reinitialize buffers");
+            ReportError(-1, "Failed to reinitialize buffers after resolution change");
+            // Transaction destructor will handle rollback
             return false;
         }
+
+        // Commit transaction - no rollback needed
+        transaction.Commit();
 
         ReportStatus("Resolution changed successfully");
         return true;
@@ -558,18 +713,27 @@ namespace CvsBallVision
 
     void CameraController::Impl::OnImageReceived(const CVS_BUFFER* pBuffer)
     {
-        if (!pBuffer || !m_imageCallback)
+        // Early validation for real-time performance
+        if (!pBuffer || !pBuffer->image.pImage || m_bShuttingDown)
             return;
 
-        // 획득 상태를 로컬 변수로 캡처하여 race condition 방지
-        bool isAcquiring = m_bAcquiring.load();
-        if (!isAcquiring)
+        // Use try_lock for real-time performance - skip frame if locked
+        std::unique_lock<std::mutex> lock(m_imageMutex, std::try_to_lock);
+        if (!lock.owns_lock())
+            return;  // Skip this frame to maintain real-time performance
+
+        // Check acquisition state with memory ordering
+        if (!m_bAcquiring.load(std::memory_order_acquire))
             return;
 
-        std::lock_guard<std::mutex> lock(m_imageMutex);
+        // Get callback under lock to ensure thread safety
+        ImageCallback callback;
+        {
+            std::lock_guard<std::mutex> cbLock(m_callbackMutex);
+            callback = m_imageCallback;
+        }
 
-        // 다시 한번 체크 (double-check pattern)
-        if (!m_bAcquiring.load())
+        if (!callback)
             return;
 
         m_frameCount++;
@@ -584,10 +748,10 @@ namespace CvsBallVision
             m_lastFpsTime = now;
         }
 
-        // 버퍼 유효성 검사
-        if (!pBuffer->image.pImage || pBuffer->image.width == 0 || pBuffer->image.height == 0)
+        // Buffer validation
+        if (pBuffer->image.width == 0 || pBuffer->image.height == 0)
         {
-            ReportError(-1, "Invalid image buffer received");
+            ReportError(-1, "Invalid image buffer dimensions");
             return;
         }
 
@@ -601,19 +765,29 @@ namespace CvsBallVision
         // Check if color conversion is needed
         if (IsColorCamera() && m_rgbBuffer.image.pImage)
         {
-            // Convert Bayer to RGB
-            CVS_ERROR status = ST_CvtColor(*pBuffer, &m_rgbBuffer, CVP_BayerRG2RGB);
-            if (status == MCAM_ERR_OK)
+            // Validate buffer sizes before conversion
+            if (ValidateBufferSize(pBuffer, &m_rgbBuffer))
             {
-                m_lastImageData.pData = (uint8_t*)m_rgbBuffer.image.pImage;
-                m_lastImageData.channels = m_rgbBuffer.image.channels;
-                m_lastImageData.width = m_rgbBuffer.image.width;
-                m_lastImageData.height = m_rgbBuffer.image.height;
-                m_lastImageData.step = m_rgbBuffer.image.step;
+                // Convert Bayer to RGB
+                CVS_ERROR status = ST_CvtColor(*pBuffer, &m_rgbBuffer, CVP_BayerRG2RGB);
+                if (status == MCAM_ERR_OK)
+                {
+                    m_lastImageData.pData = (uint8_t*)m_rgbBuffer.image.pImage;
+                    m_lastImageData.channels = m_rgbBuffer.image.channels;
+                    m_lastImageData.width = m_rgbBuffer.image.width;
+                    m_lastImageData.height = m_rgbBuffer.image.height;
+                    m_lastImageData.step = m_rgbBuffer.image.step;
+                }
+                else
+                {
+                    // Fall back to raw data
+                    m_lastImageData.pData = (uint8_t*)pBuffer->image.pImage;
+                    m_lastImageData.channels = pBuffer->image.channels;
+                }
             }
             else
             {
-                // Fall back to raw data
+                ReportError(-1, "RGB buffer size mismatch - using raw data");
                 m_lastImageData.pData = (uint8_t*)pBuffer->image.pImage;
                 m_lastImageData.channels = pBuffer->image.channels;
             }
@@ -625,29 +799,57 @@ namespace CvsBallVision
             m_lastImageData.channels = pBuffer->image.channels;
         }
 
-        // Call the callback with zero-copy data
-        if (m_imageCallback)
+        // Release lock before callback for better performance
+        lock.unlock();
+
+        // Call the callback
+        if (callback && !m_bShuttingDown)
         {
-            m_imageCallback(m_lastImageData);
+            try
+            {
+                callback(m_lastImageData);
+            }
+            catch (...)
+            {
+                // Prevent callback exceptions from crashing the system
+                ReportError(-1, "Exception in image callback");
+            }
         }
     }
 
     void CameraController::Impl::ReportError(int error, const std::string& context)
     {
         m_lastError = error;
-        if (m_errorCallback)
+
+        std::lock_guard<std::mutex> lock(m_callbackMutex);
+        if (m_errorCallback && !m_bShuttingDown)
         {
-            std::stringstream ss;
-            ss << context << " (Error: " << error << ")";
-            m_errorCallback(error, ss.str());
+            try
+            {
+                std::stringstream ss;
+                ss << context << " (Error: " << error << ")";
+                m_errorCallback(error, ss.str());
+            }
+            catch (...)
+            {
+                // Ignore callback exceptions
+            }
         }
     }
 
     void CameraController::Impl::ReportStatus(const std::string& status)
     {
-        if (m_statusCallback)
+        std::lock_guard<std::mutex> lock(m_callbackMutex);
+        if (m_statusCallback && !m_bShuttingDown)
         {
-            m_statusCallback(status);
+            try
+            {
+                m_statusCallback(status);
+            }
+            catch (...)
+            {
+                // Ignore callback exceptions
+            }
         }
     }
 
@@ -823,7 +1025,7 @@ namespace CvsBallVision
         // Initialize RGB buffer if color camera
         if (m_pImpl->IsColorCamera())
         {
-            // RGB 버퍼는 3채널로 초기화
+            // RGB buffer initialization
             status = ST_InitBuffer(m_pImpl->m_hDevice, &m_pImpl->m_rgbBuffer, 3);
             if (status != MCAM_ERR_OK)
             {
@@ -872,7 +1074,6 @@ namespace CvsBallVision
         // Clear buffer pool
         if (m_pImpl->m_bufferPool)
         {
-            m_pImpl->m_bufferPool->Clear();
             m_pImpl->m_bufferPool.reset();
         }
 
@@ -916,20 +1117,20 @@ namespace CvsBallVision
         if (m_pImpl->m_bAcquiring)
             return true;
 
-        // 버퍼 풀 상태 리셋
+        // Reset buffer pool state
         if (m_pImpl->m_bufferPool)
         {
             m_pImpl->m_bufferPool->ResetBuffers();
         }
 
-        // 이미지 데이터 초기화
+        // Initialize image data
         {
             std::lock_guard<std::mutex> lock(m_pImpl->m_imageMutex);
             memset(&m_pImpl->m_lastImageData, 0, sizeof(m_pImpl->m_lastImageData));
             m_pImpl->m_pCurrentBuffer = nullptr;
         }
 
-        // 콜백이 등록되어 있지 않으면 재등록
+        // Register callback if not already registered
         if (!m_pImpl->m_bCallbackRegistered)
         {
             CVS_ERROR status = ST_RegisterGrabCallback(m_pImpl->m_hDevice, EVENT_NEW_IMAGE,
@@ -945,7 +1146,7 @@ namespace CvsBallVision
             }
         }
 
-        // 약간의 지연 추가 (하드웨어 준비 시간)
+        // Hardware preparation time
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         CVS_ERROR status = ST_AcqStart(m_pImpl->m_hDevice);
@@ -955,7 +1156,7 @@ namespace CvsBallVision
             return false;
         }
 
-        m_pImpl->m_bAcquiring = true;
+        m_pImpl->m_bAcquiring.store(true, std::memory_order_release);
         m_pImpl->m_frameCount = 0;
         m_pImpl->m_errorCount = 0;
         m_pImpl->m_lastFrameCount = 0;
@@ -978,8 +1179,8 @@ namespace CvsBallVision
             m_pImpl->m_bStopGrabThread = false;
         }
 
-        // 획득 플래그를 먼저 false로 설정
-        m_pImpl->m_bAcquiring = false;
+        // Set flag first
+        m_pImpl->m_bAcquiring.store(false, std::memory_order_release);
 
         CVS_ERROR status = ST_AcqStop(m_pImpl->m_hDevice);
         if (status != MCAM_ERR_OK)
@@ -988,23 +1189,23 @@ namespace CvsBallVision
             return false;
         }
 
-        // 충분한 대기 시간 (카메라가 완전히 정지할 때까지)
+        // Wait for camera to fully stop
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-        // 버퍼 풀 상태 리셋
+        // Reset buffer pool
         if (m_pImpl->m_bufferPool)
         {
             m_pImpl->m_bufferPool->ResetBuffers();
         }
 
-        // 이미지 데이터 초기화
+        // Clear image data
         {
             std::lock_guard<std::mutex> lock(m_pImpl->m_imageMutex);
             memset(&m_pImpl->m_lastImageData, 0, sizeof(m_pImpl->m_lastImageData));
             m_pImpl->m_pCurrentBuffer = nullptr;
         }
 
-        // 콜백 재등록을 위해 플래그 리셋 (다음 Start 시 재등록)
+        // Unregister callback for next start
         if (m_pImpl->m_bCallbackRegistered)
         {
             ST_UnregisterGrabCallback(m_pImpl->m_hDevice, EVENT_NEW_IMAGE);
@@ -1018,7 +1219,7 @@ namespace CvsBallVision
 
     bool CameraController::IsAcquiring() const
     {
-        return m_pImpl->m_bAcquiring;
+        return m_pImpl->m_bAcquiring.load(std::memory_order_acquire);
     }
 
     bool CameraController::SetResolution(int width, int height)
@@ -1351,16 +1552,19 @@ namespace CvsBallVision
 
     void CameraController::RegisterImageCallback(ImageCallback callback)
     {
+        std::lock_guard<std::mutex> lock(m_pImpl->m_callbackMutex);
         m_pImpl->m_imageCallback = callback;
     }
 
     void CameraController::RegisterErrorCallback(ErrorCallback callback)
     {
+        std::lock_guard<std::mutex> lock(m_pImpl->m_callbackMutex);
         m_pImpl->m_errorCallback = callback;
     }
 
     void CameraController::RegisterStatusCallback(StatusCallback callback)
     {
+        std::lock_guard<std::mutex> lock(m_pImpl->m_callbackMutex);
         m_pImpl->m_statusCallback = callback;
     }
 
