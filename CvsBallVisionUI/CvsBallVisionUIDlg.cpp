@@ -21,14 +21,24 @@ CvsBallVisionUIDlg::CvsBallVisionUIDlg(CWnd* pParent /*=nullptr*/)
     , m_imageWidth(1280)
     , m_imageHeight(880)
     , m_bImageUpdated(false)
+    , m_displayBufferSize(0)
+    , m_bShuttingDown(false)  // 추가: 종료 플래그
 {
     m_pCamera = std::make_unique<CvsBallVision::CameraController>();
 }
 
 CvsBallVisionUIDlg::~CvsBallVisionUIDlg()
 {
+    // 추가: 종료 플래그 설정
+    m_bShuttingDown = true;
+
     if (m_pCamera)
     {
+        // 추가: 콜백 해제 (null로 설정하여 더 이상 호출되지 않도록)
+        m_pCamera->RegisterImageCallback(nullptr);
+        m_pCamera->RegisterErrorCallback(nullptr);
+        m_pCamera->RegisterStatusCallback(nullptr);
+
         if (m_pCamera->IsAcquiring())
             m_pCamera->StopAcquisition();
 
@@ -126,6 +136,9 @@ BOOL CvsBallVisionUIDlg::OnInitDialog()
     // Create memory DC for image display
     CreateMemoryDC();
 
+    // 예상 최대 버퍼 크기로 미리 할당
+    m_displayBuffer.reserve(1920 * 1080 * 3);
+
     // Update UI state
     UpdateUIState();
 
@@ -140,11 +153,19 @@ BOOL CvsBallVisionUIDlg::OnInitDialog()
 
 void CvsBallVisionUIDlg::OnCancel()
 {
+    // 추가: 종료 플래그 설정
+    m_bShuttingDown = true;
+
     // Clean up before closing
     KillTimer(TIMER_UPDATE_UI);
 
     if (m_pCamera)
     {
+        // 추가: 콜백 해제
+        m_pCamera->RegisterImageCallback(nullptr);
+        m_pCamera->RegisterErrorCallback(nullptr);
+        m_pCamera->RegisterStatusCallback(nullptr);
+
         if (m_pCamera->IsAcquiring())
             m_pCamera->StopAcquisition();
 
@@ -163,7 +184,18 @@ void CvsBallVisionUIDlg::OnOK()
 
 void CvsBallVisionUIDlg::OnDestroy()
 {
+    // 추가: 종료 플래그 설정
+    m_bShuttingDown = true;
+
     KillTimer(TIMER_UPDATE_UI);
+
+    // 추가: 콜백 해제
+    if (m_pCamera)
+    {
+        m_pCamera->RegisterImageCallback(nullptr);
+        m_pCamera->RegisterErrorCallback(nullptr);
+        m_pCamera->RegisterStatusCallback(nullptr);
+    }
 
     if (m_memDC.GetSafeHdc())
     {
@@ -186,17 +218,20 @@ void CvsBallVisionUIDlg::InitializeCamera()
     // Register callbacks
     m_pCamera->RegisterImageCallback(
         [this](const CvsBallVision::ImageData& imageData) {
-            OnImageCallback(imageData);
+            if (!m_bShuttingDown)  // 추가: 종료 중이 아닐 때만 처리
+                OnImageCallback(imageData);
         });
 
     m_pCamera->RegisterErrorCallback(
         [this](int errorCode, const std::string& errorMsg) {
-            OnErrorCallback(errorCode, errorMsg);
+            if (!m_bShuttingDown)  // 추가: 종료 중이 아닐 때만 처리
+                OnErrorCallback(errorCode, errorMsg);
         });
 
     m_pCamera->RegisterStatusCallback(
         [this](const std::string& status) {
-            OnStatusCallback(status);
+            if (!m_bShuttingDown)  // 추가: 종료 중이 아닐 때만 처리
+                OnStatusCallback(status);
         });
 
     // Initialize system
@@ -494,6 +529,10 @@ void CvsBallVisionUIDlg::DrawImage()
 
 void CvsBallVisionUIDlg::OnImageCallback(const CvsBallVision::ImageData& imageData)
 {
+    // 추가: 종료 중 체크
+    if (m_bShuttingDown)
+        return;
+
     // 데이터 유효성 검사 추가
     if (!imageData.pData || imageData.width <= 0 || imageData.height <= 0)
         return;
@@ -506,7 +545,13 @@ void CvsBallVisionUIDlg::OnImageCallback(const CvsBallVision::ImageData& imageDa
 
     // Copy image data
     int dataSize = imageData.width * imageData.height * 3;
-    m_displayBuffer.resize(dataSize);
+
+    // 크기가 변경된 경우에만 재할당
+    if (m_displayBufferSize != dataSize)
+    {
+        m_displayBuffer.resize(dataSize);
+        m_displayBufferSize = dataSize;
+    }
 
     if (imageData.channels == 3)
     {
@@ -528,11 +573,16 @@ void CvsBallVisionUIDlg::OnImageCallback(const CvsBallVision::ImageData& imageDa
     m_bImageUpdated = true;
 
     // Post message to update UI
-    PostMessage(WM_IMAGE_RECEIVED);
+    if (!m_bShuttingDown)  // 추가: 종료 중이 아닐 때만 메시지 전송
+        PostMessage(WM_IMAGE_RECEIVED);
 }
 
 void CvsBallVisionUIDlg::OnErrorCallback(int errorCode, const std::string& errorMsg)
 {
+    // 추가: 종료 중이거나 윈도우 핸들이 유효하지 않으면 리턴
+    if (m_bShuttingDown || !m_staticStatus.GetSafeHwnd())
+        return;
+
     CString msg;
     msg.Format(_T("Error %d: %s"), errorCode, CString(errorMsg.c_str()));
     m_staticStatus.SetWindowText(msg);
@@ -540,6 +590,10 @@ void CvsBallVisionUIDlg::OnErrorCallback(int errorCode, const std::string& error
 
 void CvsBallVisionUIDlg::OnStatusCallback(const std::string& status)
 {
+    // 추가: 종료 중이거나 윈도우 핸들이 유효하지 않으면 리턴
+    if (m_bShuttingDown || !m_staticStatus.GetSafeHwnd())
+        return;
+
     m_statusText = CString(status.c_str());
     m_staticStatus.SetWindowText(m_statusText);
 }
@@ -582,6 +636,7 @@ void CvsBallVisionUIDlg::OnBnClickedButtonDisconnect()
     {
         std::lock_guard<std::mutex> lock(m_imageMutex);
         m_displayBuffer.clear();
+        m_displayBufferSize = 0;
     }
     DrawImage();
 }
@@ -591,7 +646,6 @@ void CvsBallVisionUIDlg::OnBnClickedButtonStart()
     // UI 업데이트 전 이미지 버퍼 초기화
     {
         std::lock_guard<std::mutex> lock(m_imageMutex);
-        m_displayBuffer.clear();
         m_bImageUpdated = false;
     }
 
@@ -608,18 +662,6 @@ void CvsBallVisionUIDlg::OnBnClickedButtonStart()
 void CvsBallVisionUIDlg::OnBnClickedButtonStop()
 {
     m_pCamera->StopAcquisition();
-
-    // Stop 후 디스플레이 버퍼 유지 (마지막 프레임 표시)
-    // 필요시 아래 주석 해제하여 화면 클리어
-    /*
-    {
-        std::lock_guard<std::mutex> lock(m_imageMutex);
-        m_displayBuffer.clear();
-        m_bImageUpdated = true;
-    }
-    DrawImage();
-    */
-
     UpdateUIState();
 }
 
@@ -732,12 +774,15 @@ void CvsBallVisionUIDlg::OnTimer(UINT_PTR nIDEvent)
 {
     if (nIDEvent == TIMER_UPDATE_UI)
     {
-        UpdateStatistics();
-
-        if (m_bImageUpdated)
+        if (!m_bShuttingDown)  // 추가: 종료 중이 아닐 때만 업데이트
         {
-            m_bImageUpdated = false;
-            DrawImage();
+            UpdateStatistics();
+
+            if (m_bImageUpdated)
+            {
+                m_bImageUpdated = false;
+                DrawImage();
+            }
         }
     }
 
@@ -749,15 +794,13 @@ void CvsBallVisionUIDlg::OnPaint()
     CPaintDC dc(this);
 
     // Draw image if available
-    DrawImage();
+    if (!m_bShuttingDown)  // 추가: 종료 중이 아닐 때만 그리기
+        DrawImage();
 }
 
 HBRUSH CvsBallVisionUIDlg::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
 {
     HBRUSH hbr = CDialogEx::OnCtlColor(pDC, pWnd, nCtlColor);
-
-    // Customize colors if needed
-
     return hbr;
 }
 
@@ -765,6 +808,5 @@ LRESULT CvsBallVisionUIDlg::OnImageReceived(WPARAM wParam, LPARAM lParam)
 {
     // Image received notification
     // Drawing is handled in OnTimer for better performance
-
     return 0;
 }

@@ -62,7 +62,9 @@ private:
     std::vector<uint8_t> m_displayBuffer;
     int m_imageWidth;
     int m_imageHeight;
+    size_t m_displayBufferSize;
     std::atomic<bool> m_bImageUpdated;
+    std::atomic<bool> m_bShuttingDown;  // 추가: 종료 플래그
 
     // Statistics
     uint64_t m_frameCount;

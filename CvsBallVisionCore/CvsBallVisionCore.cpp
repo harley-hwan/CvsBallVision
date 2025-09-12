@@ -19,15 +19,18 @@ namespace CvsBallVision
         int32_t m_hDevice;
         bool m_wasAcquiring;
         bool m_shouldRestart;
+        std::atomic<bool>* m_pAcquiringFlag;
 
     public:
-        AcquisitionGuard(int32_t hDevice, bool isAcquiring)
+        AcquisitionGuard(int32_t hDevice, std::atomic<bool>* pAcquiringFlag)
             : m_hDevice(hDevice)
-            , m_wasAcquiring(isAcquiring)
-            , m_shouldRestart(isAcquiring)
+            , m_pAcquiringFlag(pAcquiringFlag)
+            , m_wasAcquiring(pAcquiringFlag->load())
+            , m_shouldRestart(m_wasAcquiring)
         {
             if (m_wasAcquiring)
             {
+                *m_pAcquiringFlag = false;
                 ST_AcqStop(m_hDevice);
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
@@ -38,6 +41,7 @@ namespace CvsBallVision
             if (m_shouldRestart && m_wasAcquiring)
             {
                 ST_AcqStart(m_hDevice);
+                *m_pAcquiringFlag = true;
             }
         }
 
@@ -54,17 +58,20 @@ namespace CvsBallVision
         bool m_shouldReregister;
         GrabCallbackFunc m_callback;
         void* m_pUserData;
+        std::atomic<bool>* m_pCallbackFlag;
 
     public:
-        CallbackGuard(int32_t hDevice, bool isRegistered, GrabCallbackFunc callback, void* pUserData)
+        CallbackGuard(int32_t hDevice, std::atomic<bool>* pCallbackFlag, GrabCallbackFunc callback, void* pUserData)
             : m_hDevice(hDevice)
-            , m_wasRegistered(isRegistered)
-            , m_shouldReregister(isRegistered)
+            , m_pCallbackFlag(pCallbackFlag)
+            , m_wasRegistered(pCallbackFlag->load())
+            , m_shouldReregister(m_wasRegistered)
             , m_callback(callback)
             , m_pUserData(pUserData)
         {
             if (m_wasRegistered)
             {
+                *m_pCallbackFlag = false;
                 ST_UnregisterGrabCallback(m_hDevice, EVENT_NEW_IMAGE);
                 std::this_thread::sleep_for(std::chrono::milliseconds(30));
             }
@@ -75,6 +82,7 @@ namespace CvsBallVision
             if (m_shouldReregister && m_wasRegistered && m_callback)
             {
                 ST_RegisterGrabCallback(m_hDevice, EVENT_NEW_IMAGE, m_callback, m_pUserData);
+                *m_pCallbackFlag = true;
             }
         }
 
@@ -91,6 +99,7 @@ namespace CvsBallVision
             CVS_BUFFER buffer;
             std::atomic<bool> inUse;
             uint64_t lastUsed;
+            std::mutex bufferMutex;
 
             BufferInfo() : inUse(false), lastUsed(0)
             {
@@ -125,6 +134,7 @@ namespace CvsBallVision
                 bool expected = false;
                 if (bufInfo->inUse.compare_exchange_strong(expected, true))
                 {
+                    std::lock_guard<std::mutex> bufLock(bufInfo->bufferMutex);
                     return &bufInfo->buffer;
                 }
             }
@@ -156,6 +166,7 @@ namespace CvsBallVision
             {
                 if (&bufInfo->buffer == pBuffer)
                 {
+                    std::lock_guard<std::mutex> bufLock(bufInfo->bufferMutex);
                     bufInfo->inUse = false;
                     bufInfo->lastUsed = std::chrono::steady_clock::now().time_since_epoch().count();
                     break;
@@ -163,12 +174,12 @@ namespace CvsBallVision
             }
         }
 
-        // 중요: 모든 버퍼를 사용 가능 상태로 리셋
         void ResetBuffers()
         {
             std::lock_guard<std::mutex> lock(m_poolMutex);
             for (auto& bufInfo : m_buffers)
             {
+                std::lock_guard<std::mutex> bufLock(bufInfo->bufferMutex);
                 bufInfo->inUse = false;
                 bufInfo->lastUsed = 0;
             }
@@ -179,6 +190,7 @@ namespace CvsBallVision
             std::lock_guard<std::mutex> lock(m_poolMutex);
             for (auto& bufInfo : m_buffers)
             {
+                std::lock_guard<std::mutex> bufLock(bufInfo->bufferMutex);
                 if (bufInfo->buffer.image.pImage)
                 {
                     ST_FreeBuffer(&bufInfo->buffer);
@@ -338,6 +350,7 @@ namespace CvsBallVision
 
         if (IsColorCamera())
         {
+            // RGB 버퍼는 3채널로 초기화
             CVS_ERROR status = ST_InitBuffer(m_hDevice, &m_rgbBuffer, 3);
             if (status != MCAM_ERR_OK)
             {
@@ -362,8 +375,8 @@ namespace CvsBallVision
         }
 
         // Use RAII guards for safe state management
-        AcquisitionGuard acqGuard(m_hDevice, m_bAcquiring);
-        CallbackGuard callbackGuard(m_hDevice, m_bCallbackRegistered, StaticGrabCallback, this);
+        AcquisitionGuard acqGuard(m_hDevice, &m_bAcquiring);
+        CallbackGuard callbackGuard(m_hDevice, &m_bCallbackRegistered, StaticGrabCallback, this);
 
         // Store original values for rollback
         int originalWidth = m_currentWidth;
@@ -403,10 +416,6 @@ namespace CvsBallVision
             ReportError(-1, "Failed to reinitialize buffers");
             return false;
         }
-
-        // Update acquisition state flags for guards
-        m_bAcquiring = acqGuard.WasAcquiring();
-        m_bCallbackRegistered = callbackGuard.WasRegistered();
 
         ReportStatus("Resolution changed successfully");
         return true;
@@ -552,11 +561,16 @@ namespace CvsBallVision
         if (!pBuffer || !m_imageCallback)
             return;
 
-        // 획득 중이 아니면 무시
-        if (!m_bAcquiring)
+        // 획득 상태를 로컬 변수로 캡처하여 race condition 방지
+        bool isAcquiring = m_bAcquiring.load();
+        if (!isAcquiring)
             return;
 
         std::lock_guard<std::mutex> lock(m_imageMutex);
+
+        // 다시 한번 체크 (double-check pattern)
+        if (!m_bAcquiring.load())
+            return;
 
         m_frameCount++;
 
@@ -799,9 +813,17 @@ namespace CvsBallVision
         // Detect available features
         m_pImpl->DetectAvailableFeatures();
 
+        // Get current resolution
+        int64_t width, height;
+        ST_GetIntReg(m_pImpl->m_hDevice, "Width", &width);
+        ST_GetIntReg(m_pImpl->m_hDevice, "Height", &height);
+        m_pImpl->m_currentWidth = static_cast<int>(width);
+        m_pImpl->m_currentHeight = static_cast<int>(height);
+
         // Initialize RGB buffer if color camera
         if (m_pImpl->IsColorCamera())
         {
+            // RGB 버퍼는 3채널로 초기화
             status = ST_InitBuffer(m_pImpl->m_hDevice, &m_pImpl->m_rgbBuffer, 3);
             if (status != MCAM_ERR_OK)
             {
@@ -809,13 +831,6 @@ namespace CvsBallVision
                 // Not critical, continue
             }
         }
-
-        // Get current resolution
-        int64_t width, height;
-        ST_GetIntReg(m_pImpl->m_hDevice, "Width", &width);
-        ST_GetIntReg(m_pImpl->m_hDevice, "Height", &height);
-        m_pImpl->m_currentWidth = static_cast<int>(width);
-        m_pImpl->m_currentHeight = static_cast<int>(height);
 
         // Set default parameters for 1280x880 @ 100 FPS
         SetResolution(1280, 880);
@@ -950,7 +965,6 @@ namespace CvsBallVision
         return true;
     }
 
-
     bool CameraController::StopAcquisition()
     {
         if (!m_pImpl->m_bAcquiring)
@@ -964,14 +978,15 @@ namespace CvsBallVision
             m_pImpl->m_bStopGrabThread = false;
         }
 
+        // 획득 플래그를 먼저 false로 설정
+        m_pImpl->m_bAcquiring = false;
+
         CVS_ERROR status = ST_AcqStop(m_pImpl->m_hDevice);
         if (status != MCAM_ERR_OK)
         {
             m_pImpl->ReportError(status, "Failed to stop acquisition");
             return false;
         }
-
-        m_pImpl->m_bAcquiring = false;
 
         // 충분한 대기 시간 (카메라가 완전히 정지할 때까지)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
