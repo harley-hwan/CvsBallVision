@@ -4,6 +4,8 @@
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include <thread>
+#include <future>
 
 // Forward declarations
 namespace CvsBallVision
@@ -47,6 +49,8 @@ protected:
     afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
     afx_msg void OnDestroy();
     afx_msg LRESULT OnImageReceived(WPARAM wParam, LPARAM lParam);
+    afx_msg LRESULT OnConnectionComplete(WPARAM wParam, LPARAM lParam);
+    afx_msg LRESULT OnAsyncOperationComplete(WPARAM wParam, LPARAM lParam);
 
 private:
     // Camera controller
@@ -54,6 +58,11 @@ private:
 
     // Camera list
     std::vector<CvsBallVision::CameraInfo> m_cameraList;
+
+    // Async operation management
+    std::atomic<bool> m_bAsyncOperationInProgress;
+    std::future<bool> m_asyncFuture;
+    std::thread m_asyncThread;
 
     // Image display
     CDC m_memDC;
@@ -108,7 +117,7 @@ private:
 
     // Private methods
     void InitializeCamera();
-    void ShutdownCamera();  // 추가: 안전한 종료 시퀀스
+    void ShutdownCamera();
     void UpdateCameraList();
     void UpdateUIState();
     void UpdateStatistics();
@@ -118,11 +127,18 @@ private:
     void DrawImage();
     void CreateMemoryDC();
 
+    // Async operations
+    void ConnectCameraAsync(uint32_t enumIndex);
+    void DisconnectCameraAsync();
+    void ApplySettingsAsync();
+
     // Callbacks from camera
     void OnImageCallback(const CvsBallVision::ImageData& imageData);
     void OnErrorCallback(int errorCode, const std::string& errorMsg);
     void OnStatusCallback(const std::string& status);
 };
 
-// Custom message for image received
+// Custom messages
 #define WM_IMAGE_RECEIVED (WM_USER + 100)
+#define WM_CONNECTION_COMPLETE (WM_USER + 101)
+#define WM_ASYNC_OPERATION_COMPLETE (WM_USER + 102)

@@ -20,6 +20,48 @@ typedef struct _cvsBuffer CVS_BUFFER;
 
 namespace CvsBallVision
 {
+    // System constants
+    namespace Constants
+    {
+        // Default camera parameters
+        constexpr int DEFAULT_WIDTH = 1280;
+        constexpr int DEFAULT_HEIGHT = 880;
+        constexpr double DEFAULT_FPS = 100.0;
+        constexpr double DEFAULT_EXPOSURE_US = 5000.0;
+        constexpr double DEFAULT_GAIN_DB = 1.0;
+
+        // Buffer management
+        constexpr size_t BUFFER_POOL_SIZE = 3;
+        constexpr size_t BUFFER_POOL_MAX_SIZE = 5;
+        constexpr double BUFFER_RESERVE_FACTOR = 1.5;
+
+        // Timing constants (milliseconds)
+        constexpr int ACQUISITION_STOP_TIMEOUT_MS = 200;
+        constexpr int CALLBACK_UNREGISTER_DELAY_MS = 50;
+        constexpr int HARDWARE_PREP_TIME_MS = 50;
+        constexpr int CAMERA_STOP_WAIT_MS = 100;
+        constexpr int BUFFER_WAIT_RETRY_MS = 10;
+        constexpr int GRAB_THREAD_SLEEP_MS = 1;
+        constexpr int GRAB_ERROR_SLEEP_MS = 10;
+        constexpr int RESOLUTION_CHANGE_DELAY_MS = 30;
+
+        // Timeout constants (seconds)
+        constexpr int SHUTDOWN_TIMEOUT_SEC = 2;
+        constexpr int BUFFER_RETURN_TIMEOUT_SEC = 2;
+        constexpr int CALLBACK_COMPLETE_TIMEOUT_SEC = 2;
+
+        // UI update intervals
+        constexpr int UI_UPDATE_INTERVAL_MS = 33;  // ~30 FPS
+        constexpr int STATISTICS_UPDATE_INTERVAL_MS = 1000;
+
+        // Buffer retry counts
+        constexpr int BUFFER_RELEASE_MAX_RETRIES = 10;
+        constexpr int BUFFER_WAIT_TIMEOUT_MS = 5;
+
+        // Error tracking
+        constexpr size_t MAX_ERROR_HISTORY = 100;
+    }
+
     // Camera information structure
     struct CameraInfo
     {

@@ -11,6 +11,8 @@
 #define new DEBUG_NEW
 #endif
 
+using namespace CvsBallVision::Constants;
+
 IMPLEMENT_DYNAMIC(CvsBallVisionUIDlg, CDialogEx)
 
 CvsBallVisionUIDlg::CvsBallVisionUIDlg(CWnd* pParent /*=nullptr*/)
@@ -18,11 +20,12 @@ CvsBallVisionUIDlg::CvsBallVisionUIDlg(CWnd* pParent /*=nullptr*/)
     , m_frameCount(0)
     , m_errorCount(0)
     , m_currentFps(0.0)
-    , m_imageWidth(1280)
-    , m_imageHeight(880)
+    , m_imageWidth(DEFAULT_WIDTH)
+    , m_imageHeight(DEFAULT_HEIGHT)
     , m_bImageUpdated(false)
     , m_displayBufferSize(0)
     , m_bShuttingDown(false)
+    , m_bAsyncOperationInProgress(false)
 {
     m_pCamera = std::make_unique<CvsBallVision::CameraController>();
 
@@ -41,18 +44,27 @@ void CvsBallVisionUIDlg::ShutdownCamera()
     if (m_bShuttingDown)
         return;
 
-    // 1. Stop acquisition first (most important)
+    // 1. Stop any async operations
+    m_bAsyncOperationInProgress = false;
+
+    // Wait for async thread if it's running
+    if (m_asyncThread.joinable())
+    {
+        m_asyncThread.join();
+    }
+
+    // 2. Stop acquisition first (most important)
     if (m_pCamera && m_pCamera->IsAcquiring())
     {
         m_pCamera->StopAcquisition();
         // Wait for acquisition to fully stop
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::this_thread::sleep_for(std::chrono::milliseconds(ACQUISITION_STOP_TIMEOUT_MS));
     }
 
-    // 2. Set shutdown flag
+    // 3. Set shutdown flag
     m_bShuttingDown = true;
 
-    // 3. Clear callbacks to prevent any new calls
+    // 4. Clear callbacks to prevent any new calls
     if (m_pCamera)
     {
         m_pCamera->RegisterImageCallback(nullptr);
@@ -60,16 +72,16 @@ void CvsBallVisionUIDlg::ShutdownCamera()
         m_pCamera->RegisterStatusCallback(nullptr);
     }
 
-    // 4. Wait for any ongoing callbacks to complete
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // 5. Wait for any ongoing callbacks to complete
+    std::this_thread::sleep_for(std::chrono::milliseconds(CAMERA_STOP_WAIT_MS));
 
-    // 5. Disconnect camera
+    // 6. Disconnect camera
     if (m_pCamera && m_pCamera->IsConnected())
     {
         m_pCamera->DisconnectCamera();
     }
 
-    // 6. Free system
+    // 7. Free system
     if (m_pCamera && m_pCamera->IsSystemInitialized())
     {
         m_pCamera->FreeSystem();
@@ -127,6 +139,8 @@ BEGIN_MESSAGE_MAP(CvsBallVisionUIDlg, CDialogEx)
     ON_WM_CTLCOLOR()
     ON_WM_DESTROY()
     ON_MESSAGE(WM_IMAGE_RECEIVED, &CvsBallVisionUIDlg::OnImageReceived)
+    ON_MESSAGE(WM_CONNECTION_COMPLETE, &CvsBallVisionUIDlg::OnConnectionComplete)
+    ON_MESSAGE(WM_ASYNC_OPERATION_COMPLETE, &CvsBallVisionUIDlg::OnAsyncOperationComplete)
 END_MESSAGE_MAP()
 
 BOOL CvsBallVisionUIDlg::OnInitDialog()
@@ -139,25 +153,40 @@ BOOL CvsBallVisionUIDlg::OnInitDialog()
     // Initialize camera system
     InitializeCamera();
 
-    // Set default values
-    m_editWidth.SetWindowText(_T("1280"));
-    m_editHeight.SetWindowText(_T("880"));
-    m_editExposure.SetWindowText(_T("5000"));
-    m_editGain.SetWindowText(_T("1.0"));
-    m_editFps.SetWindowText(_T("100"));
+    // Set default values with constants
+    CString str;
+    str.Format(_T("%d"), DEFAULT_WIDTH);
+    m_editWidth.SetWindowText(str);
+
+    str.Format(_T("%d"), DEFAULT_HEIGHT);
+    m_editHeight.SetWindowText(str);
+
+    str.Format(_T("%.0f"), DEFAULT_EXPOSURE_US);
+    m_editExposure.SetWindowText(str);
+
+    str.Format(_T("%.1f"), DEFAULT_GAIN_DB);
+    m_editGain.SetWindowText(str);
+
+    str.Format(_T("%.0f"), DEFAULT_FPS);
+    m_editFps.SetWindowText(str);
 
     // Initialize sliders
     m_sliderExposure.SetRange(100, 100000);
-    m_sliderExposure.SetPos(5000);
+    m_sliderExposure.SetPos(static_cast<int>(DEFAULT_EXPOSURE_US));
     m_sliderGain.SetRange(0, 100);
-    m_sliderGain.SetPos(10);
+    m_sliderGain.SetPos(static_cast<int>(DEFAULT_GAIN_DB * 10));
     m_sliderFps.SetRange(1, 200);
-    m_sliderFps.SetPos(100);
+    m_sliderFps.SetPos(static_cast<int>(DEFAULT_FPS));
 
     // Update slider value displays
-    m_staticExposureValue.SetWindowText(_T("5000 ¥ìs"));
-    m_staticGainValue.SetWindowText(_T("1.0 dB"));
-    m_staticFpsValue.SetWindowText(_T("100 fps"));
+    str.Format(_T("%.0f ¥ìs"), DEFAULT_EXPOSURE_US);
+    m_staticExposureValue.SetWindowText(str);
+
+    str.Format(_T("%.1f dB"), DEFAULT_GAIN_DB);
+    m_staticGainValue.SetWindowText(str);
+
+    str.Format(_T("%.0f fps"), DEFAULT_FPS);
+    m_staticFpsValue.SetWindowText(str);
 
     // Create memory DC for image display
     CreateMemoryDC();
@@ -165,8 +194,8 @@ BOOL CvsBallVisionUIDlg::OnInitDialog()
     // Update UI state
     UpdateUIState();
 
-    // Start UI update timer (30Hz)
-    SetTimer(TIMER_UPDATE_UI, 33, nullptr);
+    // Start UI update timer
+    SetTimer(TIMER_UPDATE_UI, UI_UPDATE_INTERVAL_MS, nullptr);
 
     // Refresh camera list
     UpdateCameraList();
@@ -277,29 +306,30 @@ void CvsBallVisionUIDlg::UpdateUIState()
     bool bConnected = m_pCamera && m_pCamera->IsConnected();
     bool bAcquiring = m_pCamera && m_pCamera->IsAcquiring();
     bool bHasCameras = m_comboCameraList.GetCount() > 0;
+    bool bAsyncOperation = m_bAsyncOperationInProgress;
 
-    // Enable/disable buttons
-    m_btnConnect.EnableWindow(!bConnected && bHasCameras);
-    m_btnDisconnect.EnableWindow(bConnected);
-    m_btnStart.EnableWindow(bConnected && !bAcquiring);
-    m_btnStop.EnableWindow(bConnected && bAcquiring);
-    m_btnRefresh.EnableWindow(!bConnected);
-    m_btnApplySettings.EnableWindow(bConnected);
-    m_btnSaveSettings.EnableWindow(bConnected);
-    m_btnLoadSettings.EnableWindow(bConnected);
+    // Enable/disable buttons based on state and async operations
+    m_btnConnect.EnableWindow(!bConnected && bHasCameras && !bAsyncOperation);
+    m_btnDisconnect.EnableWindow(bConnected && !bAsyncOperation);
+    m_btnStart.EnableWindow(bConnected && !bAcquiring && !bAsyncOperation);
+    m_btnStop.EnableWindow(bConnected && bAcquiring && !bAsyncOperation);
+    m_btnRefresh.EnableWindow(!bConnected && !bAsyncOperation);
+    m_btnApplySettings.EnableWindow(bConnected && !bAsyncOperation);
+    m_btnSaveSettings.EnableWindow(bConnected && !bAsyncOperation);
+    m_btnLoadSettings.EnableWindow(bConnected && !bAsyncOperation);
 
     // Enable/disable parameter controls
-    m_editWidth.EnableWindow(bConnected && !bAcquiring);
-    m_editHeight.EnableWindow(bConnected && !bAcquiring);
-    m_editExposure.EnableWindow(bConnected);
-    m_editGain.EnableWindow(bConnected);
-    m_editFps.EnableWindow(bConnected);
+    m_editWidth.EnableWindow(bConnected && !bAcquiring && !bAsyncOperation);
+    m_editHeight.EnableWindow(bConnected && !bAcquiring && !bAsyncOperation);
+    m_editExposure.EnableWindow(bConnected && !bAsyncOperation);
+    m_editGain.EnableWindow(bConnected && !bAsyncOperation);
+    m_editFps.EnableWindow(bConnected && !bAsyncOperation);
 
-    m_sliderExposure.EnableWindow(bConnected);
-    m_sliderGain.EnableWindow(bConnected);
-    m_sliderFps.EnableWindow(bConnected);
+    m_sliderExposure.EnableWindow(bConnected && !bAsyncOperation);
+    m_sliderGain.EnableWindow(bConnected && !bAsyncOperation);
+    m_sliderFps.EnableWindow(bConnected && !bAsyncOperation);
 
-    m_comboCameraList.EnableWindow(!bConnected);
+    m_comboCameraList.EnableWindow(!bConnected && !bAsyncOperation);
 }
 
 void CvsBallVisionUIDlg::UpdateStatistics()
@@ -551,7 +581,7 @@ void CvsBallVisionUIDlg::OnImageCallback(const CvsBallVision::ImageData& imageDa
     if (m_displayBuffer.capacity() < dataSize)
     {
         // Allocate with extra space to reduce future reallocations
-        m_displayBuffer.reserve(dataSize * 1.5);
+        m_displayBuffer.reserve(static_cast<size_t>(dataSize * BUFFER_RESERVE_FACTOR));
     }
 
     // Resize to actual needed size
@@ -604,6 +634,103 @@ void CvsBallVisionUIDlg::OnStatusCallback(const std::string& status)
     m_staticStatus.SetWindowText(m_statusText);
 }
 
+void CvsBallVisionUIDlg::ConnectCameraAsync(uint32_t enumIndex)
+{
+    // Set async flag
+    m_bAsyncOperationInProgress = true;
+
+    // Update UI
+    m_staticStatus.SetWindowText(_T("Connecting to camera..."));
+    UpdateUIState();
+
+    // Launch async operation
+    m_asyncThread = std::thread([this, enumIndex]() {
+        bool success = false;
+
+        if (m_pCamera)
+        {
+            success = m_pCamera->ConnectCamera(enumIndex);
+        }
+
+        // Post message to main thread with result
+        PostMessage(WM_CONNECTION_COMPLETE, static_cast<WPARAM>(success), 0);
+        });
+
+    // Detach thread - we'll handle completion via message
+    m_asyncThread.detach();
+}
+
+void CvsBallVisionUIDlg::DisconnectCameraAsync()
+{
+    m_bAsyncOperationInProgress = true;
+    m_staticStatus.SetWindowText(_T("Disconnecting camera..."));
+    UpdateUIState();
+
+    m_asyncThread = std::thread([this]() {
+        bool success = false;
+
+        if (m_pCamera)
+        {
+            if (m_pCamera->IsAcquiring())
+            {
+                m_pCamera->StopAcquisition();
+            }
+            success = m_pCamera->DisconnectCamera();
+        }
+
+        PostMessage(WM_ASYNC_OPERATION_COMPLETE, static_cast<WPARAM>(success), 1);
+        });
+
+    m_asyncThread.detach();
+}
+
+void CvsBallVisionUIDlg::ApplySettingsAsync()
+{
+    m_bAsyncOperationInProgress = true;
+    m_staticStatus.SetWindowText(_T("Applying settings..."));
+    UpdateUIState();
+
+    // Get values from UI controls
+    CString str;
+    m_editWidth.GetWindowText(str);
+    int width = _ttoi(str);
+
+    m_editHeight.GetWindowText(str);
+    int height = _ttoi(str);
+
+    m_editExposure.GetWindowText(str);
+    double exposure = _ttof(str);
+
+    m_editGain.GetWindowText(str);
+    double gain = _ttof(str);
+
+    m_editFps.GetWindowText(str);
+    double fps = _ttof(str);
+
+    m_asyncThread = std::thread([this, width, height, exposure, gain, fps]() {
+        bool success = true;
+
+        if (m_pCamera && m_pCamera->IsConnected())
+        {
+            if (width > 0 && height > 0)
+                success &= m_pCamera->SetResolution(width, height);
+
+            if (exposure > 0)
+                success &= m_pCamera->SetExposureTime(exposure);
+
+            if (gain >= 0)
+                success &= m_pCamera->SetGain(gain);
+
+            if (fps > 0)
+                success &= m_pCamera->SetFrameRate(fps);
+        }
+
+        PostMessage(WM_ASYNC_OPERATION_COMPLETE, static_cast<WPARAM>(success), 2);
+        });
+
+    m_asyncThread.detach();
+}
+
 void CvsBallVisionUIDlg::OnBnClickedButtonConnect()
 {
     int sel = m_comboCameraList.GetCurSel();
@@ -613,38 +740,14 @@ void CvsBallVisionUIDlg::OnBnClickedButtonConnect()
         return;
     }
 
-    if (m_pCamera->ConnectCamera(m_cameraList[sel].enumIndex))
-    {
-        UpdateParameterRanges();
-        UpdateParameterValues();
-        UpdateUIState();
-
-        // Apply default settings
-        ApplySettings();
-    }
-    else
-    {
-        AfxMessageBox(_T("Failed to connect to camera"), MB_ICONERROR);
-    }
+    // Connect asynchronously
+    ConnectCameraAsync(m_cameraList[sel].enumIndex);
 }
 
 void CvsBallVisionUIDlg::OnBnClickedButtonDisconnect()
 {
-    if (m_pCamera->IsAcquiring())
-    {
-        m_pCamera->StopAcquisition();
-    }
-
-    m_pCamera->DisconnectCamera();
-    UpdateUIState();
-
-    // Clear display
-    {
-        std::lock_guard<std::mutex> lock(m_imageMutex);
-        m_displayBuffer.clear();
-        m_displayBufferSize = 0;
-    }
-    DrawImage();
+    // Disconnect asynchronously
+    DisconnectCameraAsync();
 }
 
 void CvsBallVisionUIDlg::OnBnClickedButtonStart()
@@ -678,7 +781,8 @@ void CvsBallVisionUIDlg::OnBnClickedButtonRefresh()
 
 void CvsBallVisionUIDlg::OnBnClickedButtonApplySettings()
 {
-    ApplySettings();
+    // Apply settings asynchronously
+    ApplySettingsAsync();
 }
 
 void CvsBallVisionUIDlg::OnBnClickedButtonSaveSettings()
@@ -814,5 +918,76 @@ LRESULT CvsBallVisionUIDlg::OnImageReceived(WPARAM wParam, LPARAM lParam)
 {
     // Image received notification
     // Drawing is handled in OnTimer for better performance
+    return 0;
+}
+
+LRESULT CvsBallVisionUIDlg::OnConnectionComplete(WPARAM wParam, LPARAM lParam)
+{
+    bool success = static_cast<bool>(wParam);
+
+    // Reset async flag
+    m_bAsyncOperationInProgress = false;
+
+    if (success)
+    {
+        m_staticStatus.SetWindowText(_T("Camera connected successfully"));
+        UpdateParameterRanges();
+        UpdateParameterValues();
+
+        // Apply default settings
+        ApplySettings();
+    }
+    else
+    {
+        m_staticStatus.SetWindowText(_T("Failed to connect to camera"));
+        AfxMessageBox(_T("Failed to connect to camera"), MB_ICONERROR);
+    }
+
+    UpdateUIState();
+    return 0;
+}
+
+LRESULT CvsBallVisionUIDlg::OnAsyncOperationComplete(WPARAM wParam, LPARAM lParam)
+{
+    bool success = static_cast<bool>(wParam);
+    int operationType = static_cast<int>(lParam);
+
+    // Reset async flag
+    m_bAsyncOperationInProgress = false;
+
+    switch (operationType)
+    {
+    case 1: // Disconnect
+        if (success)
+        {
+            m_staticStatus.SetWindowText(_T("Camera disconnected"));
+            // Clear display
+            {
+                std::lock_guard<std::mutex> lock(m_imageMutex);
+                m_displayBuffer.clear();
+                m_displayBufferSize = 0;
+            }
+            DrawImage();
+        }
+        else
+        {
+            m_staticStatus.SetWindowText(_T("Failed to disconnect camera"));
+        }
+        break;
+
+    case 2: // Apply Settings
+        if (success)
+        {
+            m_staticStatus.SetWindowText(_T("Settings applied successfully"));
+            UpdateParameterValues();
+        }
+        else
+        {
+            m_staticStatus.SetWindowText(_T("Failed to apply some settings"));
+        }
+        break;
+    }
+
+    UpdateUIState();
     return 0;
 }

@@ -4,11 +4,14 @@
 #include <chrono>
 #include <algorithm>
 #include <sstream>
+#include <condition_variable>
 
 #pragma comment(lib, "cvsCamCtrl.lib")
 
 namespace CvsBallVision
 {
+    using namespace Constants;
+
     // Forward declaration for callback type
     typedef void(*GrabCallbackFunc)(int32_t, const CVS_BUFFER*, void*);
 
@@ -32,7 +35,7 @@ namespace CvsBallVision
             {
                 *m_pAcquiringFlag = false;
                 ST_AcqStop(m_hDevice);
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                std::this_thread::sleep_for(std::chrono::milliseconds(HARDWARE_PREP_TIME_MS));
             }
         }
 
@@ -73,7 +76,7 @@ namespace CvsBallVision
             {
                 *m_pCallbackFlag = false;
                 ST_UnregisterGrabCallback(m_hDevice, EVENT_NEW_IMAGE);
-                std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                std::this_thread::sleep_for(std::chrono::milliseconds(RESOLUTION_CHANGE_DELAY_MS));
             }
         }
 
@@ -149,7 +152,7 @@ namespace CvsBallVision
         std::atomic<bool> m_shuttingDown;
 
     public:
-        ImageBufferPool(int32_t hDevice, size_t maxBuffers = 3)
+        ImageBufferPool(int32_t hDevice, size_t maxBuffers = BUFFER_POOL_SIZE)
             : m_hDevice(hDevice)
             , m_maxBuffers(maxBuffers)
             , m_shuttingDown(false)
@@ -255,7 +258,8 @@ namespace CvsBallVision
 
         void WaitForAllBuffersReturned()
         {
-            auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            auto timeout = std::chrono::steady_clock::now() +
+                std::chrono::seconds(BUFFER_RETURN_TIMEOUT_SEC);
             while (std::chrono::steady_clock::now() < timeout)
             {
                 bool allReturned = true;
@@ -268,7 +272,7 @@ namespace CvsBallVision
                     }
                 }
                 if (allReturned) break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                std::this_thread::sleep_for(std::chrono::milliseconds(BUFFER_WAIT_TIMEOUT_MS));
             }
         }
 
@@ -278,10 +282,10 @@ namespace CvsBallVision
             for (auto& bufInfo : m_buffers)
             {
                 // Wait for buffer to be released
-                int retries = 10;
+                int retries = BUFFER_RELEASE_MAX_RETRIES;
                 while (bufInfo->inUse.load(std::memory_order_acquire) && retries-- > 0)
                 {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(BUFFER_WAIT_RETRY_MS));
                 }
 
                 if (bufInfo->buffer.image.pImage)
@@ -318,6 +322,11 @@ namespace CvsBallVision
         std::atomic<bool> m_bAcquiring;
         std::atomic<bool> m_bCallbackRegistered;
         std::atomic<bool> m_bShuttingDown;
+
+        // Callback synchronization (improved)
+        std::atomic<int> m_activeCallbacks;
+        std::condition_variable m_cvCallbackComplete;
+        std::mutex m_shutdownMutex;
 
         // Optimized buffer management
         std::unique_ptr<ImageBufferPool> m_bufferPool;
@@ -366,6 +375,7 @@ namespace CvsBallVision
         bool ReinitializeBuffers();
         bool SetResolutionOptimized(int width, int height);
         bool ValidateBufferSize(const CVS_BUFFER* pSrc, const CVS_BUFFER* pDst);
+        void SafeShutdown();
     };
 
     CameraController::Impl::Impl()
@@ -376,6 +386,7 @@ namespace CvsBallVision
         , m_bCallbackRegistered(false)
         , m_bShuttingDown(false)
         , m_bStopGrabThread(false)
+        , m_activeCallbacks(0)
         , m_frameCount(0)
         , m_errorCount(0)
         , m_lastFrameCount(0)
@@ -395,17 +406,47 @@ namespace CvsBallVision
 
     CameraController::Impl::~Impl()
     {
-        m_bShuttingDown = true;
+        SafeShutdown();
+    }
 
-        // Stop acquisition first
+    void CameraController::Impl::SafeShutdown()
+    {
+        // 1. Unregister callbacks first to prevent new callbacks
+        if (m_bCallbackRegistered)
+        {
+            ST_UnregisterGrabCallback(m_hDevice, EVENT_NEW_IMAGE);
+            m_bCallbackRegistered = false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(CALLBACK_UNREGISTER_DELAY_MS));
+        }
+
+        // 2. Stop acquisition
         if (m_bAcquiring)
         {
             m_bAcquiring = false;
             ST_AcqStop(m_hDevice);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(ACQUISITION_STOP_TIMEOUT_MS));
         }
 
-        // Clear callbacks
+        // 3. Set shutdown flag
+        m_bShuttingDown = true;
+
+        // 4. Wait for all active callbacks to complete
+        {
+            std::unique_lock<std::mutex> lock(m_shutdownMutex);
+            bool allComplete = m_cvCallbackComplete.wait_for(
+                lock,
+                std::chrono::seconds(CALLBACK_COMPLETE_TIMEOUT_SEC),
+                [this] { return m_activeCallbacks == 0; }
+            );
+
+            if (!allComplete)
+            {
+                // Force clear if timeout
+                m_activeCallbacks = 0;
+            }
+        }
+
+        // 5. Clear callbacks
         {
             std::lock_guard<std::mutex> lock(m_callbackMutex);
             m_imageCallback = nullptr;
@@ -413,13 +454,7 @@ namespace CvsBallVision
             m_statusCallback = nullptr;
         }
 
-        if (m_bCallbackRegistered)
-        {
-            ST_UnregisterGrabCallback(m_hDevice, EVENT_NEW_IMAGE);
-            m_bCallbackRegistered = false;
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-
+        // 6. Clean up buffers
         if (m_bufferPool)
         {
             m_bufferPool.reset();
@@ -430,14 +465,18 @@ namespace CvsBallVision
             ST_FreeBuffer(&m_rgbBuffer);
         }
 
+        // 7. Disconnect camera
         if (m_bConnected)
         {
             ST_CloseDevice(m_hDevice);
+            m_bConnected = false;
         }
 
+        // 8. Free system
         if (m_bSystemInitialized)
         {
             ST_FreeSystem();
+            m_bSystemInitialized = false;
         }
     }
 
@@ -470,7 +509,7 @@ namespace CvsBallVision
         }
         else
         {
-            m_bufferPool = std::make_unique<ImageBufferPool>(m_hDevice, 3);
+            m_bufferPool = std::make_unique<ImageBufferPool>(m_hDevice, BUFFER_POOL_SIZE);
         }
 
         // Free and reinitialize RGB buffer if needed
@@ -673,7 +712,7 @@ namespace CvsBallVision
             CVS_BUFFER* pBuffer = m_bufferPool ? m_bufferPool->GetBuffer() : nullptr;
             if (!pBuffer)
             {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(GRAB_THREAD_SLEEP_MS));
                 continue;
             }
 
@@ -686,13 +725,13 @@ namespace CvsBallVision
             else if (status == MCAM_ERR_TIMEOUT)
             {
                 // Timeout is normal in trigger mode
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(GRAB_THREAD_SLEEP_MS));
             }
             else
             {
                 m_errorCount++;
                 ReportError(status, "Image grab failed");
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                std::this_thread::sleep_for(std::chrono::milliseconds(GRAB_ERROR_SLEEP_MS));
             }
 
             if (m_bufferPool)
@@ -707,7 +746,18 @@ namespace CvsBallVision
         if (eventID == EVENT_NEW_IMAGE && pUserDefine)
         {
             Impl* pImpl = static_cast<Impl*>(pUserDefine);
+
+            // Increment active callback count
+            pImpl->m_activeCallbacks++;
+
             pImpl->OnImageReceived(pBuffer);
+
+            // Decrement and notify if shutting down
+            pImpl->m_activeCallbacks--;
+            if (pImpl->m_bShuttingDown && pImpl->m_activeCallbacks == 0)
+            {
+                pImpl->m_cvCallbackComplete.notify_all();
+            }
         }
     }
 
@@ -741,7 +791,7 @@ namespace CvsBallVision
         // Calculate FPS
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastFpsTime).count();
-        if (elapsed >= 1000)
+        if (elapsed >= STATISTICS_UPDATE_INTERVAL_MS)
         {
             m_currentFps = (m_frameCount - m_lastFrameCount) * 1000.0 / elapsed;
             m_lastFrameCount = m_frameCount;
@@ -1010,7 +1060,7 @@ namespace CvsBallVision
         m_pImpl->m_bConnected = true;
 
         // Initialize buffer pool
-        m_pImpl->m_bufferPool = std::make_unique<ImageBufferPool>(m_pImpl->m_hDevice, 3);
+        m_pImpl->m_bufferPool = std::make_unique<ImageBufferPool>(m_pImpl->m_hDevice, BUFFER_POOL_SIZE);
 
         // Detect available features
         m_pImpl->DetectAvailableFeatures();
@@ -1034,13 +1084,13 @@ namespace CvsBallVision
             }
         }
 
-        // Set default parameters for 1280x880 @ 100 FPS
-        SetResolution(1280, 880);
+        // Set default parameters
+        SetResolution(DEFAULT_WIDTH, DEFAULT_HEIGHT);
 
         // Only set frame rate if supported
         if (m_pImpl->m_bHasFrameRate)
         {
-            SetFrameRate(100.0);
+            SetFrameRate(DEFAULT_FPS);
         }
 
         // Register callback
@@ -1147,7 +1197,7 @@ namespace CvsBallVision
         }
 
         // Hardware preparation time
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(HARDWARE_PREP_TIME_MS));
 
         CVS_ERROR status = ST_AcqStart(m_pImpl->m_hDevice);
         if (status != MCAM_ERR_OK)
@@ -1190,7 +1240,7 @@ namespace CvsBallVision
         }
 
         // Wait for camera to fully stop
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(CAMERA_STOP_WAIT_MS));
 
         // Reset buffer pool
         if (m_pImpl->m_bufferPool)
@@ -1210,7 +1260,7 @@ namespace CvsBallVision
         {
             ST_UnregisterGrabCallback(m_pImpl->m_hDevice, EVENT_NEW_IMAGE);
             m_pImpl->m_bCallbackRegistered = false;
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(CALLBACK_UNREGISTER_DELAY_MS));
         }
 
         m_pImpl->ReportStatus("Acquisition stopped");
