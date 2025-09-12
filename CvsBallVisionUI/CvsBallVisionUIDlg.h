@@ -1,153 +1,125 @@
 #pragma once
-
-#include "afxwin.h"
-#include "afxcmn.h"
-#include "../CvsBallVisionCore/CvsBallVisionCore.h"
+#include "afxdialogex.h"
 #include <memory>
+#include <vector>
 #include <atomic>
 #include <mutex>
 
 // Forward declarations
-class CImageDisplayWnd;
-
-// CCvsBallVisionUIDlg dialog
-class CCvsBallVisionUIDlg : public CDialogEx
+namespace CvsBallVision
 {
-    DECLARE_DYNAMIC(CCvsBallVisionUIDlg)
+    class CameraController;
+    struct CameraInfo;
+    struct ImageData;
+}
+
+class CvsBallVisionUIDlg : public CDialogEx
+{
+    DECLARE_DYNAMIC(CvsBallVisionUIDlg)
 
 public:
-    CCvsBallVisionUIDlg(CWnd* pParent = nullptr);
-    virtual ~CCvsBallVisionUIDlg();
+    CvsBallVisionUIDlg(CWnd* pParent = nullptr);
+    virtual ~CvsBallVisionUIDlg();
 
-    // Dialog Data
-#ifdef AFX_DESIGN_TIME
     enum { IDD = IDD_CVSBALLVISIONUI_DIALOG };
-#endif
 
 protected:
     virtual void DoDataExchange(CDataExchange* pDX);
     virtual BOOL OnInitDialog();
+    virtual void OnCancel();
+    virtual void OnOK();
 
     DECLARE_MESSAGE_MAP()
 
-    // Message handlers
-    afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
-    afx_msg void OnPaint();
-    afx_msg HCURSOR OnQueryDragIcon();
-    afx_msg void OnBnClickedBtnConnect();
-    afx_msg void OnBnClickedBtnDisconnect();
-    afx_msg void OnBnClickedBtnStart();
-    afx_msg void OnBnClickedBtnStop();
-    afx_msg void OnBnClickedBtnApplySettings();
+    // Control event handlers
+    afx_msg void OnBnClickedButtonConnect();
+    afx_msg void OnBnClickedButtonDisconnect();
+    afx_msg void OnBnClickedButtonStart();
+    afx_msg void OnBnClickedButtonStop();
+    afx_msg void OnBnClickedButtonRefresh();
+    afx_msg void OnBnClickedButtonApplySettings();
+    afx_msg void OnBnClickedButtonSaveSettings();
+    afx_msg void OnBnClickedButtonLoadSettings();
+    afx_msg void OnCbnSelchangeComboCameraList();
     afx_msg void OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar);
-    afx_msg void OnEnChangeEditGain();
-    afx_msg void OnEnChangeEditExposure();
-    afx_msg void OnEnChangeEditFps();
-    afx_msg void OnDestroy();
     afx_msg void OnTimer(UINT_PTR nIDEvent);
-    afx_msg LRESULT OnImageUpdate(WPARAM wParam, LPARAM lParam);
+    afx_msg void OnPaint();
+    afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
+    afx_msg void OnDestroy();
+    afx_msg LRESULT OnImageReceived(WPARAM wParam, LPARAM lParam);
 
 private:
-    // Camera core instance
-    std::unique_ptr<CvsBallVisionCore> m_pCamera;
+    // Camera controller
+    std::unique_ptr<CvsBallVision::CameraController> m_pCamera;
 
-    // Frame callback handler
-    void OnFrameReceived(const ImageData& imageData);
-
-    // Update UI controls
-    void UpdateControls();
-    void UpdateParameterDisplay();
-    void EnableCameraControls(BOOL bEnable);
+    // Camera list
+    std::vector<CvsBallVision::CameraInfo> m_cameraList;
 
     // Image display
-    void DisplayImage(const ImageData& imageData);
-    void ClearDisplay();
+    CDC m_memDC;
+    CBitmap m_memBitmap;
+    std::mutex m_imageMutex;
+    std::vector<uint8_t> m_displayBuffer;
+    int m_imageWidth;
+    int m_imageHeight;
+    std::atomic<bool> m_bImageUpdated;
 
-    // Conversion helper
-    void ConvertBayerToRGB(const unsigned char* pSrc, unsigned char* pDst, int width, int height);
+    // Statistics
+    uint64_t m_frameCount;
+    uint64_t m_errorCount;
+    double m_currentFps;
+    CString m_statusText;
 
-    // Settings validation
-    bool ValidateSettings();
-    void ApplyCameraSettings();
-
-    // Status update
-    void SetStatusText(const CString& text);
-
-private:
-    // Controls
+    // UI Controls
+    CComboBox m_comboCameraList;
     CButton m_btnConnect;
     CButton m_btnDisconnect;
     CButton m_btnStart;
     CButton m_btnStop;
+    CButton m_btnRefresh;
     CButton m_btnApplySettings;
+    CButton m_btnSaveSettings;
+    CButton m_btnLoadSettings;
 
     CStatic m_staticVideo;
     CStatic m_staticStatus;
-    CStatic m_staticFpsDisplay;
-    CStatic m_staticResolution;
+    CStatic m_staticFps;
+    CStatic m_staticFrameCount;
+    CStatic m_staticErrorCount;
 
-    CEdit m_editGain;
+    CEdit m_editWidth;
+    CEdit m_editHeight;
     CEdit m_editExposure;
+    CEdit m_editGain;
     CEdit m_editFps;
 
-    CSliderCtrl m_sliderGain;
     CSliderCtrl m_sliderExposure;
+    CSliderCtrl m_sliderGain;
     CSliderCtrl m_sliderFps;
 
-    // Image display window
-    std::unique_ptr<CImageDisplayWnd> m_pImageWnd;
-
-    // State variables
-    std::atomic<bool> m_bConnected;
-    std::atomic<bool> m_bAcquiring;
-
-    // Frame statistics
-    std::atomic<int> m_frameCount;
-    std::atomic<DWORD> m_lastFpsTime;
-    double m_currentFps;
-
-    // Image buffer for display
-    std::vector<BYTE> m_displayBuffer;
-    std::mutex m_bufferMutex;
-    BITMAPINFO m_bitmapInfo;
-
-    // Camera parameters
-    double m_gainValue;
-    double m_exposureValue;
-    double m_fpsValue;
-
-    // Window icon
-    HICON m_hIcon;
+    CStatic m_staticExposureValue;
+    CStatic m_staticGainValue;
+    CStatic m_staticFpsValue;
 
     // Timer ID
-    static const UINT_PTR TIMER_UPDATE_FPS = 1001;
+    static const UINT_PTR TIMER_UPDATE_UI = 1;
+
+    // Private methods
+    void InitializeCamera();
+    void UpdateCameraList();
+    void UpdateUIState();
+    void UpdateStatistics();
+    void UpdateParameterRanges();
+    void UpdateParameterValues();
+    void ApplySettings();
+    void DrawImage();
+    void CreateMemoryDC();
+
+    // Callbacks from camera
+    void OnImageCallback(const CvsBallVision::ImageData& imageData);
+    void OnErrorCallback(int errorCode, const std::string& errorMsg);
+    void OnStatusCallback(const std::string& status);
 };
 
-// Custom image display window class
-class CImageDisplayWnd : public CWnd
-{
-public:
-    CImageDisplayWnd();
-    virtual ~CImageDisplayWnd();
-
-    BOOL Create(CWnd* pParent, const CRect& rect);
-    void SetImage(const BYTE* pData, int width, int height, int bpp = 8);
-    void Clear();
-
-protected:
-    afx_msg void OnPaint();
-    afx_msg BOOL OnEraseBkgnd(CDC* pDC);
-    DECLARE_MESSAGE_MAP()
-
-private:
-    std::vector<BYTE> m_imageBuffer;
-    int m_imageWidth;
-    int m_imageHeight;
-    int m_imageBpp;
-    std::mutex m_imageMutex;
-    CBitmap m_bitmap;
-    bool m_bHasImage;
-};
-
-// Custom message for image updates
-#define WM_IMAGE_UPDATE (WM_USER + 100)
+// Custom message for image received
+#define WM_IMAGE_RECEIVED (WM_USER + 100)

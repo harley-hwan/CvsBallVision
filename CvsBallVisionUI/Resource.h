@@ -1,48 +1,49 @@
 // Resource.h - MFC Resource Definitions
 //{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
-// Used by CvsBallVisionUI.rc
-//
+
 #define IDM_ABOUTBOX                    0x0010
 #define IDD_ABOUTBOX                    100
-#define IDS_ABOUTBOX                    101
-#define IDD_CVSBALLVISIONUI_DIALOG      102
-#define IDR_MAINFRAME                   128
+#define IDS_ABOUTBOX					101
+#define IDD_CVSBALLVISIONUI_DIALOG     102
+#define IDR_MAINFRAME                  128
 
-// Main Dialog Controls
-#define IDC_STATIC_VIDEO                1000
-#define IDC_BTN_CONNECT                 1001
-#define IDC_BTN_DISCONNECT              1002
-#define IDC_BTN_START                   1003
-#define IDC_BTN_STOP                    1004
-#define IDC_STATIC_STATUS               1005
-#define IDC_STATIC_FPS_DISPLAY          1006
-#define IDC_STATIC_RESOLUTION           1007
+// Camera Selection Controls
+#define IDC_COMBO_CAMERA_LIST           1000
+#define IDC_BUTTON_REFRESH              1001
+#define IDC_BUTTON_CONNECT              1002
+#define IDC_BUTTON_DISCONNECT           1003
 
-// Camera Settings Group
-#define IDC_GROUP_SETTINGS              1010
-#define IDC_STATIC_GAIN_LABEL           1011
-#define IDC_EDIT_GAIN                   1012
-#define IDC_SLIDER_GAIN                 1013
-#define IDC_STATIC_GAIN_UNIT            1014
-#define IDC_STATIC_EXPOSURE_LABEL       1015
-#define IDC_EDIT_EXPOSURE               1016
-#define IDC_SLIDER_EXPOSURE             1017
-#define IDC_STATIC_EXPOSURE_UNIT        1018
-#define IDC_STATIC_FPS_LABEL            1019
-#define IDC_EDIT_FPS                    1020
-#define IDC_SLIDER_FPS                  1021
-#define IDC_STATIC_FPS_UNIT             1022
-#define IDC_BTN_APPLY_SETTINGS          1023
+// Acquisition Controls
+#define IDC_BUTTON_START                1010
+#define IDC_BUTTON_STOP                 1011
 
-// Camera Info Group
-#define IDC_GROUP_CAMERA_INFO           1030
-#define IDC_STATIC_MODEL_LABEL          1031
-#define IDC_STATIC_MODEL_VALUE          1032
-#define IDC_STATIC_SERIAL_LABEL         1033
-#define IDC_STATIC_SERIAL_VALUE         1034
-#define IDC_STATIC_VENDOR_LABEL         1035
-#define IDC_STATIC_VENDOR_VALUE         1036
+// Parameter Controls
+#define IDC_EDIT_WIDTH                  1020
+#define IDC_EDIT_HEIGHT                 1021
+#define IDC_EDIT_EXPOSURE               1022
+#define IDC_EDIT_GAIN                   1023
+#define IDC_EDIT_FPS                    1024
+
+#define IDC_SLIDER_EXPOSURE             1030
+#define IDC_SLIDER_GAIN                 1031
+#define IDC_SLIDER_FPS                  1032
+
+#define IDC_STATIC_EXPOSURE_VALUE       1040
+#define IDC_STATIC_GAIN_VALUE           1041
+#define IDC_STATIC_FPS_VALUE            1042
+
+// Settings Controls
+#define IDC_BUTTON_APPLY_SETTINGS       1050
+#define IDC_BUTTON_SAVE_SETTINGS        1051
+#define IDC_BUTTON_LOAD_SETTINGS        1052
+
+// Display and Status
+#define IDC_STATIC_VIDEO                1060
+#define IDC_STATIC_STATUS               1061
+#define IDC_STATIC_FPS                  1062
+#define IDC_STATIC_FRAME_COUNT          1063
+#define IDC_STATIC_ERROR_COUNT          1064
 
 // Next default values for new objects
 //

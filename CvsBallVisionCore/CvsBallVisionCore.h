@@ -1,118 +1,145 @@
 #pragma once
 
 #ifdef CVSBALLVISIONCORE_EXPORTS
-#define CVSCORE_API __declspec(dllexport)
+#define CVSBALLVISION_API __declspec(dllexport)
 #else
-#define CVSCORE_API __declspec(dllimport)
+#define CVSBALLVISION_API __declspec(dllimport)
 #endif
-#define NOMINMAX
 
 #include <Windows.h>
 #include <memory>
-#include <vector>
 #include <functional>
-#include <string>
+#include <atomic>
 #include <mutex>
-#include <stdint.h>
+#include <string>
+#include <vector>
 
+// Forward declarations
+struct _cvsBuffer;
+typedef struct _cvsBuffer CVS_BUFFER;
 
-// Camera parameters structure
-struct CVSCORE_API CameraParams {
-    int width;
-    int height;
-    double fps;
-    double exposureTime;  // in microseconds
-    double gain;         // in dB
-
-    CameraParams() :
-        width(1280),
-        height(880),
-        fps(100.0),
-        exposureTime(1000.0),  // 1ms = 1000us
-        gain(0.0) {
-    }
-};
-
-// Image data structure
-struct CVSCORE_API ImageData {
-    unsigned char* pData;
-    size_t dataSize;
-    int width;
-    int height;
-    int stride;
-    uint64_t timestamp;
-    int pixelFormat;  // 0: Mono8, 1: Bayer8, 2: RGB8
-
-    ImageData() : pData(nullptr), dataSize(0), width(0), height(0),
-        stride(0), timestamp(0), pixelFormat(0) {
-    }
-};
-
-// Callback function type for new frame events
-typedef std::function<void(const ImageData&)> FrameCallback;
-
-class CVSCORE_API CvsBallVisionCore
+namespace CvsBallVision
 {
-public:
-    CvsBallVisionCore();
-    ~CvsBallVisionCore();
+    // Camera information structure
+    struct CameraInfo
+    {
+        std::string userID;
+        std::string modelName;
+        std::string serialNumber;
+        std::string deviceVersion;
+        std::string ipAddress;
+        std::string macAddress;
+        uint32_t enumIndex;
+        bool isConnected;
+    };
 
-    // Camera enumeration and connection
-    bool EnumerateCameras(std::vector<std::string>& cameraList);
-    bool ConnectCamera(const std::string& cameraId = "");
-    bool DisconnectCamera();
-    bool IsConnected() const;
+    // Camera parameters structure
+    struct CameraParameters
+    {
+        int width;
+        int height;
+        double exposureTime;
+        double gain;
+        double fps;
+        std::string pixelFormat;
+    };
 
-    // Camera control
-    bool StartAcquisition();
-    bool StopAcquisition();
-    bool IsAcquiring() const;
+    // Image data structure
+    struct ImageData
+    {
+        uint8_t* pData;
+        int width;
+        int height;
+        int channels;
+        int step;
+        uint64_t blockID;
+        uint64_t timestamp;
+    };
 
-    // Parameter control
-    bool SetImageSize(int width, int height);
-    bool GetImageSize(int& width, int& height);
+    // Callback types
+    using ImageCallback = std::function<void(const ImageData&)>;
+    using ErrorCallback = std::function<void(int errorCode, const std::string& errorMsg)>;
+    using StatusCallback = std::function<void(const std::string& status)>;
 
-    bool SetFrameRate(double fps);
-    bool GetFrameRate(double& fps);
-    bool GetFrameRateRange(double& minFps, double& maxFps);
+    class CVSBALLVISION_API CameraController
+    {
+    public:
+        CameraController();
+        ~CameraController();
 
-    bool SetExposureTime(double exposureTimeUs);
-    bool GetExposureTime(double& exposureTimeUs);
-    bool GetExposureTimeRange(double& minExpUs, double& maxExpUs);
+        // System initialization
+        bool InitializeSystem();
+        void FreeSystem();
+        bool IsSystemInitialized() const;
 
-    bool SetGain(double gainDb);
-    bool GetGain(double& gainDb);
-    bool GetGainRange(double& minGain, double& maxGain);
+        // Camera enumeration and connection
+        bool UpdateDeviceList(uint32_t timeout = 500);
+        std::vector<CameraInfo> GetAvailableCameras();
+        bool ConnectCamera(uint32_t enumIndex);
+        bool DisconnectCamera();
+        bool IsConnected() const;
 
-    // Get current parameters
-    bool GetCameraParams(CameraParams& params);
-    bool SetCameraParams(const CameraParams& params);
+        // Acquisition control
+        bool StartAcquisition();
+        bool StopAcquisition();
+        bool IsAcquiring() const;
 
-    // Frame callback registration
-    void RegisterFrameCallback(FrameCallback callback);
-    void UnregisterFrameCallback();
+        // Parameter control
+        bool SetResolution(int width, int height);
+        bool GetResolution(int& width, int& height);
 
-    // Get last error message
-    std::string GetLastError() const;
+        bool SetExposureTime(double exposureTimeUs);
+        bool GetExposureTime(double& exposureTimeUs);
+        bool GetExposureTimeRange(double& min, double& max);
 
-    // Camera information
-    std::string GetCameraModel() const;
-    std::string GetCameraSerialNumber() const;
-    std::string GetCameraVendor() const;
+        bool SetGain(double gain);
+        bool GetGain(double& gain);
+        bool GetGainRange(double& min, double& max);
 
-private:
-    // Private implementation to avoid DLL boundary issues
-    class Impl;
-    Impl* m_pImpl;  // Use raw pointer instead of unique_ptr for DLL compatibility
+        bool SetFrameRate(double fps);
+        bool GetFrameRate(double& fps);
+        bool GetFrameRateRange(double& min, double& max);
 
-    // Disable copy operations
-    CvsBallVisionCore(const CvsBallVisionCore&) = delete;
-    CvsBallVisionCore& operator=(const CvsBallVisionCore&) = delete;
-};
+        bool SetPixelFormat(const std::string& format);
+        std::string GetPixelFormat();
+        std::vector<std::string> GetAvailablePixelFormats();
 
-// Helper functions
-extern "C" {
-    CVSCORE_API CvsBallVisionCore* CreateCameraInstance();
-    CVSCORE_API void DestroyCameraInstance(CvsBallVisionCore* pCamera);
-    CVSCORE_API const char* GetVersionString();
+        // Advanced parameter control
+        bool SetTriggerMode(bool enable);
+        bool SetTriggerSource(const std::string& source);
+        bool ExecuteSoftwareTrigger();
+
+        // Image retrieval
+        bool GetLatestImage(ImageData& imageData);
+
+        // Callbacks
+        void RegisterImageCallback(ImageCallback callback);
+        void RegisterErrorCallback(ErrorCallback callback);
+        void RegisterStatusCallback(StatusCallback callback);
+
+        // Statistics
+        void GetStatistics(uint64_t& frameCount, uint64_t& errorCount, double& currentFps);
+
+        // Error handling
+        int GetLastError() const;
+        std::string GetLastErrorDescription() const;
+
+        // Parameter persistence
+        bool SaveParameters(const std::string& filePath);
+        bool LoadParameters(const std::string& filePath);
+
+    private:
+        class Impl;
+        std::unique_ptr<Impl> m_pImpl;
+
+        // Disable copy
+        CameraController(const CameraController&) = delete;
+        CameraController& operator=(const CameraController&) = delete;
+    };
+
+    // Utility functions
+    CVSBALLVISION_API std::string GetSDKVersion();
+    CVSBALLVISION_API bool ConvertBayerToRGB(const uint8_t* pSrc, uint8_t* pDst,
+        int width, int height,
+        const std::string& bayerPattern);
 }

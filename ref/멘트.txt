@@ -1,0 +1,5 @@
+첫번째 첨부한 코드는 CvsBallVisionCore dll 프로젝트 관련 소스 코드이고,
+
+두번째 첨부한 코드는 해당 dll 함수를 이용하여 MFC UI로 표현한 CvsBallVisionUI 프로젝트 관련 소스 코드이다.
+
+전체 코드 내용을 자세히 분석하고 완벽히 숙지해줘.

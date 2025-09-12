@@ -3,7 +3,7 @@
 #include "CvsBallVisionUI.h"
 #include "CvsBallVisionUIDlg.h"
 #include "afxdialogex.h"
-#include <algorithm>
+#include "../CvsBallVisionCore/CvsBallVisionCore.h"
 #include <sstream>
 #include <iomanip>
 
@@ -11,661 +11,760 @@
 #define new DEBUG_NEW
 #endif
 
-// CAboutDlg dialog used for App About
-class CAboutDlg : public CDialogEx
-{
-public:
-    CAboutDlg();
-    enum { IDD = IDD_ABOUTBOX };
+IMPLEMENT_DYNAMIC(CvsBallVisionUIDlg, CDialogEx)
 
-protected:
-    virtual void DoDataExchange(CDataExchange* pDX);
-    DECLARE_MESSAGE_MAP()
-};
-
-CAboutDlg::CAboutDlg() : CDialogEx(IDD_ABOUTBOX)
-{
-}
-
-void CAboutDlg::DoDataExchange(CDataExchange* pDX)
-{
-    CDialogEx::DoDataExchange(pDX);
-}
-
-BEGIN_MESSAGE_MAP(CAboutDlg, CDialogEx)
-END_MESSAGE_MAP()
-
-// CCvsBallVisionUIDlg dialog
-IMPLEMENT_DYNAMIC(CCvsBallVisionUIDlg, CDialogEx)
-
-CCvsBallVisionUIDlg::CCvsBallVisionUIDlg(CWnd* pParent /*=nullptr*/)
+CvsBallVisionUIDlg::CvsBallVisionUIDlg(CWnd* pParent /*=nullptr*/)
     : CDialogEx(IDD_CVSBALLVISIONUI_DIALOG, pParent)
-    , m_bConnected(false)
-    , m_bAcquiring(false)
     , m_frameCount(0)
-    , m_lastFpsTime(0)
+    , m_errorCount(0)
     , m_currentFps(0.0)
-    , m_gainValue(0.0)
-    , m_exposureValue(1000.0)  // 1ms default
-    , m_fpsValue(100.0)
+    , m_imageWidth(1280)
+    , m_imageHeight(880)
+    , m_bImageUpdated(false)
 {
-    m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
+    m_pCamera = std::make_unique<CvsBallVision::CameraController>();
 }
 
-CCvsBallVisionUIDlg::~CCvsBallVisionUIDlg()
+CvsBallVisionUIDlg::~CvsBallVisionUIDlg()
 {
-    if (m_pCamera) {
-        m_pCamera->UnregisterFrameCallback();
-        if (m_pCamera->IsAcquiring()) {
+    if (m_pCamera)
+    {
+        if (m_pCamera->IsAcquiring())
             m_pCamera->StopAcquisition();
-        }
-        if (m_pCamera->IsConnected()) {
+
+        if (m_pCamera->IsConnected())
             m_pCamera->DisconnectCamera();
-        }
+
+        if (m_pCamera->IsSystemInitialized())
+            m_pCamera->FreeSystem();
     }
 }
 
-void CCvsBallVisionUIDlg::DoDataExchange(CDataExchange* pDX)
+void CvsBallVisionUIDlg::DoDataExchange(CDataExchange* pDX)
 {
     CDialogEx::DoDataExchange(pDX);
-    DDX_Control(pDX, IDC_BTN_CONNECT, m_btnConnect);
-    DDX_Control(pDX, IDC_BTN_DISCONNECT, m_btnDisconnect);
-    DDX_Control(pDX, IDC_BTN_START, m_btnStart);
-    DDX_Control(pDX, IDC_BTN_STOP, m_btnStop);
-    DDX_Control(pDX, IDC_BTN_APPLY_SETTINGS, m_btnApplySettings);
+
+    DDX_Control(pDX, IDC_COMBO_CAMERA_LIST, m_comboCameraList);
+    DDX_Control(pDX, IDC_BUTTON_CONNECT, m_btnConnect);
+    DDX_Control(pDX, IDC_BUTTON_DISCONNECT, m_btnDisconnect);
+    DDX_Control(pDX, IDC_BUTTON_START, m_btnStart);
+    DDX_Control(pDX, IDC_BUTTON_STOP, m_btnStop);
+    DDX_Control(pDX, IDC_BUTTON_REFRESH, m_btnRefresh);
+    DDX_Control(pDX, IDC_BUTTON_APPLY_SETTINGS, m_btnApplySettings);
+    DDX_Control(pDX, IDC_BUTTON_SAVE_SETTINGS, m_btnSaveSettings);
+    DDX_Control(pDX, IDC_BUTTON_LOAD_SETTINGS, m_btnLoadSettings);
+
     DDX_Control(pDX, IDC_STATIC_VIDEO, m_staticVideo);
     DDX_Control(pDX, IDC_STATIC_STATUS, m_staticStatus);
-    DDX_Control(pDX, IDC_STATIC_FPS_DISPLAY, m_staticFpsDisplay);
-    DDX_Control(pDX, IDC_STATIC_RESOLUTION, m_staticResolution);
-    DDX_Control(pDX, IDC_EDIT_GAIN, m_editGain);
+    DDX_Control(pDX, IDC_STATIC_FPS, m_staticFps);
+    DDX_Control(pDX, IDC_STATIC_FRAME_COUNT, m_staticFrameCount);
+    DDX_Control(pDX, IDC_STATIC_ERROR_COUNT, m_staticErrorCount);
+
+    DDX_Control(pDX, IDC_EDIT_WIDTH, m_editWidth);
+    DDX_Control(pDX, IDC_EDIT_HEIGHT, m_editHeight);
     DDX_Control(pDX, IDC_EDIT_EXPOSURE, m_editExposure);
+    DDX_Control(pDX, IDC_EDIT_GAIN, m_editGain);
     DDX_Control(pDX, IDC_EDIT_FPS, m_editFps);
-    DDX_Control(pDX, IDC_SLIDER_GAIN, m_sliderGain);
+
     DDX_Control(pDX, IDC_SLIDER_EXPOSURE, m_sliderExposure);
+    DDX_Control(pDX, IDC_SLIDER_GAIN, m_sliderGain);
     DDX_Control(pDX, IDC_SLIDER_FPS, m_sliderFps);
+
+    DDX_Control(pDX, IDC_STATIC_EXPOSURE_VALUE, m_staticExposureValue);
+    DDX_Control(pDX, IDC_STATIC_GAIN_VALUE, m_staticGainValue);
+    DDX_Control(pDX, IDC_STATIC_FPS_VALUE, m_staticFpsValue);
 }
 
-BEGIN_MESSAGE_MAP(CCvsBallVisionUIDlg, CDialogEx)
-    ON_WM_SYSCOMMAND()
-    ON_WM_PAINT()
-    ON_WM_QUERYDRAGICON()
-    ON_WM_DESTROY()
-    ON_WM_TIMER()
+BEGIN_MESSAGE_MAP(CvsBallVisionUIDlg, CDialogEx)
+    ON_BN_CLICKED(IDC_BUTTON_CONNECT, &CvsBallVisionUIDlg::OnBnClickedButtonConnect)
+    ON_BN_CLICKED(IDC_BUTTON_DISCONNECT, &CvsBallVisionUIDlg::OnBnClickedButtonDisconnect)
+    ON_BN_CLICKED(IDC_BUTTON_START, &CvsBallVisionUIDlg::OnBnClickedButtonStart)
+    ON_BN_CLICKED(IDC_BUTTON_STOP, &CvsBallVisionUIDlg::OnBnClickedButtonStop)
+    ON_BN_CLICKED(IDC_BUTTON_REFRESH, &CvsBallVisionUIDlg::OnBnClickedButtonRefresh)
+    ON_BN_CLICKED(IDC_BUTTON_APPLY_SETTINGS, &CvsBallVisionUIDlg::OnBnClickedButtonApplySettings)
+    ON_BN_CLICKED(IDC_BUTTON_SAVE_SETTINGS, &CvsBallVisionUIDlg::OnBnClickedButtonSaveSettings)
+    ON_BN_CLICKED(IDC_BUTTON_LOAD_SETTINGS, &CvsBallVisionUIDlg::OnBnClickedButtonLoadSettings)
+    ON_CBN_SELCHANGE(IDC_COMBO_CAMERA_LIST, &CvsBallVisionUIDlg::OnCbnSelchangeComboCameraList)
     ON_WM_HSCROLL()
-    ON_BN_CLICKED(IDC_BTN_CONNECT, &CCvsBallVisionUIDlg::OnBnClickedBtnConnect)
-    ON_BN_CLICKED(IDC_BTN_DISCONNECT, &CCvsBallVisionUIDlg::OnBnClickedBtnDisconnect)
-    ON_BN_CLICKED(IDC_BTN_START, &CCvsBallVisionUIDlg::OnBnClickedBtnStart)
-    ON_BN_CLICKED(IDC_BTN_STOP, &CCvsBallVisionUIDlg::OnBnClickedBtnStop)
-    ON_BN_CLICKED(IDC_BTN_APPLY_SETTINGS, &CCvsBallVisionUIDlg::OnBnClickedBtnApplySettings)
-    ON_EN_CHANGE(IDC_EDIT_GAIN, &CCvsBallVisionUIDlg::OnEnChangeEditGain)
-    ON_EN_CHANGE(IDC_EDIT_EXPOSURE, &CCvsBallVisionUIDlg::OnEnChangeEditExposure)
-    ON_EN_CHANGE(IDC_EDIT_FPS, &CCvsBallVisionUIDlg::OnEnChangeEditFps)
-    ON_MESSAGE(WM_IMAGE_UPDATE, &CCvsBallVisionUIDlg::OnImageUpdate)
+    ON_WM_TIMER()
+    ON_WM_PAINT()
+    ON_WM_CTLCOLOR()
+    ON_WM_DESTROY()
+    ON_MESSAGE(WM_IMAGE_RECEIVED, &CvsBallVisionUIDlg::OnImageReceived)
 END_MESSAGE_MAP()
 
-BOOL CCvsBallVisionUIDlg::OnInitDialog()
+BOOL CvsBallVisionUIDlg::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
 
-    // Add "About..." menu item to system menu
-    ASSERT((IDM_ABOUTBOX & 0xFFF0) == IDM_ABOUTBOX);
-    ASSERT(IDM_ABOUTBOX < 0xF000);
+    // Set window title
+    SetWindowText(_T("CvsBallVision - CREVIS Camera Control"));
 
-    CMenu* pSysMenu = GetSystemMenu(FALSE);
-    if (pSysMenu != nullptr) {
-        BOOL bNameValid;
-        CString strAboutMenu;
-        bNameValid = strAboutMenu.LoadString(IDS_ABOUTBOX);
-        ASSERT(bNameValid);
-        if (!strAboutMenu.IsEmpty()) {
-            pSysMenu->AppendMenu(MF_SEPARATOR);
-            pSysMenu->AppendMenu(MF_STRING, IDM_ABOUTBOX, strAboutMenu);
-        }
-    }
+    // Initialize camera system
+    InitializeCamera();
 
-    SetIcon(m_hIcon, TRUE);
-    SetIcon(m_hIcon, FALSE);
-
-    // Create camera instance
-    m_pCamera = std::make_unique<CvsBallVisionCore>();
-
-    // Create image display window
-    CRect videoRect;
-    m_staticVideo.GetWindowRect(&videoRect);
-    ScreenToClient(&videoRect);
-
-    m_pImageWnd = std::make_unique<CImageDisplayWnd>();
-    m_pImageWnd->Create(this, videoRect);
-    m_pImageWnd->ShowWindow(SW_SHOW);
+    // Set default values
+    m_editWidth.SetWindowText(_T("1280"));
+    m_editHeight.SetWindowText(_T("880"));
+    m_editExposure.SetWindowText(_T("5000"));
+    m_editGain.SetWindowText(_T("1.0"));
+    m_editFps.SetWindowText(_T("100"));
 
     // Initialize sliders
-    m_sliderGain.SetRange(0, 560);  // 0-56 dB in 0.1 dB steps
-    m_sliderGain.SetPos(0);
-    m_sliderGain.SetTicFreq(100);
+    m_sliderExposure.SetRange(100, 100000);
+    m_sliderExposure.SetPos(5000);
+    m_sliderGain.SetRange(0, 100);
+    m_sliderGain.SetPos(10);
+    m_sliderFps.SetRange(1, 200);
+    m_sliderFps.SetPos(100);
 
-    m_sliderExposure.SetRange(1, 30000);  // 1us to 30ms (logarithmic scale needed)
-    m_sliderExposure.SetPos(1000);  // 1ms
-    m_sliderExposure.SetTicFreq(1000);
+    // Update slider value displays
+    m_staticExposureValue.SetWindowText(_T("5000 μs"));
+    m_staticGainValue.SetWindowText(_T("1.0 dB"));
+    m_staticFpsValue.SetWindowText(_T("100 fps"));
 
-    m_sliderFps.SetRange(10, 1000);  // 1-100 fps in 0.1 fps steps
-    m_sliderFps.SetPos(1000);  // 100 fps
-    m_sliderFps.SetTicFreq(100);
+    // Create memory DC for image display
+    CreateMemoryDC();
 
-    // Initialize edit controls with default values
-    CString str;
-    str.Format(_T("%.1f"), m_gainValue);
-    m_editGain.SetWindowText(str);
+    // Update UI state
+    UpdateUIState();
 
-    str.Format(_T("%.1f"), m_exposureValue);
-    m_editExposure.SetWindowText(str);
+    // Start UI update timer (30Hz)
+    SetTimer(TIMER_UPDATE_UI, 33, nullptr);
 
-    str.Format(_T("%.1f"), m_fpsValue);
-    m_editFps.SetWindowText(str);
-
-    // Initialize bitmap info structure
-    memset(&m_bitmapInfo, 0, sizeof(BITMAPINFO));
-    m_bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    m_bitmapInfo.bmiHeader.biPlanes = 1;
-    m_bitmapInfo.bmiHeader.biBitCount = 8;
-    m_bitmapInfo.bmiHeader.biCompression = BI_RGB;
-    m_bitmapInfo.bmiHeader.biSizeImage = 0;
-
-    // Initialize controls state
-    UpdateControls();
-    SetStatusText(_T("Ready"));
-
-    // Register frame callback
-    auto callback = [this](const ImageData& imageData) {
-        OnFrameReceived(imageData);
-        };
-    m_pCamera->RegisterFrameCallback(callback);
-
-    // Start FPS update timer
-    SetTimer(TIMER_UPDATE_FPS, 1000, nullptr);
+    // Refresh camera list
+    UpdateCameraList();
 
     return TRUE;
 }
 
-void CCvsBallVisionUIDlg::OnSysCommand(UINT nID, LPARAM lParam)
+void CvsBallVisionUIDlg::OnCancel()
 {
-    if ((nID & 0xFFF0) == IDM_ABOUTBOX) {
-        CAboutDlg dlgAbout;
-        dlgAbout.DoModal();
-    }
-    else {
-        CDialogEx::OnSysCommand(nID, lParam);
-    }
-}
+    // Clean up before closing
+    KillTimer(TIMER_UPDATE_UI);
 
-void CCvsBallVisionUIDlg::OnPaint()
-{
-    if (IsIconic()) {
-        CPaintDC dc(this);
-
-        SendMessage(WM_ICONERASEBKGND, reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
-
-        int cxIcon = GetSystemMetrics(SM_CXICON);
-        int cyIcon = GetSystemMetrics(SM_CYICON);
-        CRect rect;
-        GetClientRect(&rect);
-        int x = (rect.Width() - cxIcon + 1) / 2;
-        int y = (rect.Height() - cyIcon + 1) / 2;
-
-        dc.DrawIcon(x, y, m_hIcon);
-    }
-    else {
-        CDialogEx::OnPaint();
-    }
-}
-
-HCURSOR CCvsBallVisionUIDlg::OnQueryDragIcon()
-{
-    return static_cast<HCURSOR>(m_hIcon);
-}
-
-void CCvsBallVisionUIDlg::OnDestroy()
-{
-    KillTimer(TIMER_UPDATE_FPS);
-
-    if (m_pCamera) {
-        m_pCamera->UnregisterFrameCallback();
-        if (m_pCamera->IsAcquiring()) {
+    if (m_pCamera)
+    {
+        if (m_pCamera->IsAcquiring())
             m_pCamera->StopAcquisition();
-        }
-        if (m_pCamera->IsConnected()) {
+
+        if (m_pCamera->IsConnected())
             m_pCamera->DisconnectCamera();
-        }
+    }
+
+    CDialogEx::OnCancel();
+}
+
+void CvsBallVisionUIDlg::OnOK()
+{
+    // Prevent closing on Enter key
+    // Do nothing
+}
+
+void CvsBallVisionUIDlg::OnDestroy()
+{
+    KillTimer(TIMER_UPDATE_UI);
+
+    if (m_memDC.GetSafeHdc())
+    {
+        m_memDC.DeleteDC();
+    }
+
+    if (m_memBitmap.GetSafeHandle())
+    {
+        m_memBitmap.DeleteObject();
     }
 
     CDialogEx::OnDestroy();
 }
 
-void CCvsBallVisionUIDlg::OnTimer(UINT_PTR nIDEvent)
+void CvsBallVisionUIDlg::InitializeCamera()
 {
-    if (nIDEvent == TIMER_UPDATE_FPS) {
-        DWORD currentTime = GetTickCount();
-        DWORD deltaTime = currentTime - m_lastFpsTime;
+    if (!m_pCamera)
+        return;
 
-        if (deltaTime > 0) {
-            int frames = m_frameCount.exchange(0);
-            m_currentFps = (frames * 1000.0) / deltaTime;
-            m_lastFpsTime = currentTime;
+    // Register callbacks
+    m_pCamera->RegisterImageCallback(
+        [this](const CvsBallVision::ImageData& imageData) {
+            OnImageCallback(imageData);
+        });
 
-            CString strFps;
-            strFps.Format(_T("FPS: %.1f"), m_currentFps);
-            m_staticFpsDisplay.SetWindowText(strFps);
+    m_pCamera->RegisterErrorCallback(
+        [this](int errorCode, const std::string& errorMsg) {
+            OnErrorCallback(errorCode, errorMsg);
+        });
+
+    m_pCamera->RegisterStatusCallback(
+        [this](const std::string& status) {
+            OnStatusCallback(status);
+        });
+
+    // Initialize system
+    if (!m_pCamera->InitializeSystem())
+    {
+        AfxMessageBox(_T("Failed to initialize camera system!"), MB_ICONERROR);
+    }
+}
+
+void CvsBallVisionUIDlg::UpdateCameraList()
+{
+    if (!m_pCamera)
+        return;
+
+    // Clear current list
+    m_comboCameraList.ResetContent();
+    m_cameraList.clear();
+
+    // Update device list
+    m_pCamera->UpdateDeviceList();
+
+    // Get available cameras
+    m_cameraList = m_pCamera->GetAvailableCameras();
+
+    // Add to combo box
+    for (const auto& camera : m_cameraList)
+    {
+        CString itemText;
+        itemText.Format(_T("%s - %s [%s]"),
+            CString(camera.modelName.c_str()),
+            CString(camera.serialNumber.c_str()),
+            CString(camera.ipAddress.c_str()));
+        m_comboCameraList.AddString(itemText);
+    }
+
+    // Select first item if available
+    if (m_comboCameraList.GetCount() > 0)
+    {
+        m_comboCameraList.SetCurSel(0);
+    }
+
+    UpdateUIState();
+}
+
+void CvsBallVisionUIDlg::UpdateUIState()
+{
+    bool bConnected = m_pCamera && m_pCamera->IsConnected();
+    bool bAcquiring = m_pCamera && m_pCamera->IsAcquiring();
+    bool bHasCameras = m_comboCameraList.GetCount() > 0;
+
+    // Enable/disable buttons
+    m_btnConnect.EnableWindow(!bConnected && bHasCameras);
+    m_btnDisconnect.EnableWindow(bConnected);
+    m_btnStart.EnableWindow(bConnected && !bAcquiring);
+    m_btnStop.EnableWindow(bConnected && bAcquiring);
+    m_btnRefresh.EnableWindow(!bConnected);
+    m_btnApplySettings.EnableWindow(bConnected);
+    m_btnSaveSettings.EnableWindow(bConnected);
+    m_btnLoadSettings.EnableWindow(bConnected);
+
+    // Enable/disable parameter controls
+    m_editWidth.EnableWindow(bConnected && !bAcquiring);
+    m_editHeight.EnableWindow(bConnected && !bAcquiring);
+    m_editExposure.EnableWindow(bConnected);
+    m_editGain.EnableWindow(bConnected);
+    m_editFps.EnableWindow(bConnected);
+
+    m_sliderExposure.EnableWindow(bConnected);
+    m_sliderGain.EnableWindow(bConnected);
+    m_sliderFps.EnableWindow(bConnected);
+
+    m_comboCameraList.EnableWindow(!bConnected);
+}
+
+void CvsBallVisionUIDlg::UpdateStatistics()
+{
+    if (!m_pCamera || !m_pCamera->IsConnected())
+        return;
+
+    m_pCamera->GetStatistics(m_frameCount, m_errorCount, m_currentFps);
+
+    CString str;
+    str.Format(_T("FPS: %.1f"), m_currentFps);
+    m_staticFps.SetWindowText(str);
+
+    str.Format(_T("Frames: %llu"), m_frameCount);
+    m_staticFrameCount.SetWindowText(str);
+
+    str.Format(_T("Errors: %llu"), m_errorCount);
+    m_staticErrorCount.SetWindowText(str);
+}
+
+void CvsBallVisionUIDlg::UpdateParameterRanges()
+{
+    if (!m_pCamera || !m_pCamera->IsConnected())
+        return;
+
+    double min, max;
+
+    // Update exposure range
+    if (m_pCamera->GetExposureTimeRange(min, max))
+    {
+        m_sliderExposure.SetRange(static_cast<int>(min), static_cast<int>(max));
+    }
+
+    // Update gain range
+    if (m_pCamera->GetGainRange(min, max))
+    {
+        m_sliderGain.SetRange(static_cast<int>(min * 10), static_cast<int>(max * 10));
+    }
+
+    // Update FPS range
+    if (m_pCamera->GetFrameRateRange(min, max))
+    {
+        m_sliderFps.SetRange(static_cast<int>(min), static_cast<int>(max));
+    }
+}
+
+void CvsBallVisionUIDlg::UpdateParameterValues()
+{
+    if (!m_pCamera || !m_pCamera->IsConnected())
+        return;
+
+    double value;
+    CString str;
+
+    // Update exposure
+    if (m_pCamera->GetExposureTime(value))
+    {
+        str.Format(_T("%.0f"), value);
+        m_editExposure.SetWindowText(str);
+        m_sliderExposure.SetPos(static_cast<int>(value));
+
+        str.Format(_T("%.0f μs"), value);
+        m_staticExposureValue.SetWindowText(str);
+    }
+
+    // Update gain
+    if (m_pCamera->GetGain(value))
+    {
+        str.Format(_T("%.1f"), value);
+        m_editGain.SetWindowText(str);
+        m_sliderGain.SetPos(static_cast<int>(value * 10));
+
+        str.Format(_T("%.1f dB"), value);
+        m_staticGainValue.SetWindowText(str);
+    }
+
+    // Update FPS
+    if (m_pCamera->GetFrameRate(value))
+    {
+        str.Format(_T("%.0f"), value);
+        m_editFps.SetWindowText(str);
+        m_sliderFps.SetPos(static_cast<int>(value));
+
+        str.Format(_T("%.0f fps"), value);
+        m_staticFpsValue.SetWindowText(str);
+    }
+
+    // Update resolution
+    int width, height;
+    if (m_pCamera->GetResolution(width, height))
+    {
+        str.Format(_T("%d"), width);
+        m_editWidth.SetWindowText(str);
+
+        str.Format(_T("%d"), height);
+        m_editHeight.SetWindowText(str);
+    }
+}
+
+void CvsBallVisionUIDlg::ApplySettings()
+{
+    if (!m_pCamera || !m_pCamera->IsConnected())
+        return;
+
+    CString str;
+
+    // Apply resolution
+    m_editWidth.GetWindowText(str);
+    int width = _ttoi(str);
+
+    m_editHeight.GetWindowText(str);
+    int height = _ttoi(str);
+
+    if (width > 0 && height > 0)
+    {
+        m_pCamera->SetResolution(width, height);
+    }
+
+    // Apply exposure
+    m_editExposure.GetWindowText(str);
+    double exposure = _ttof(str);
+    if (exposure > 0)
+    {
+        m_pCamera->SetExposureTime(exposure);
+    }
+
+    // Apply gain
+    m_editGain.GetWindowText(str);
+    double gain = _ttof(str);
+    if (gain >= 0)
+    {
+        m_pCamera->SetGain(gain);
+    }
+
+    // Apply FPS
+    m_editFps.GetWindowText(str);
+    double fps = _ttof(str);
+    if (fps > 0)
+    {
+        m_pCamera->SetFrameRate(fps);
+    }
+
+    UpdateParameterValues();
+}
+
+void CvsBallVisionUIDlg::CreateMemoryDC()
+{
+    CClientDC dc(&m_staticVideo);
+
+    if (m_memDC.GetSafeHdc())
+    {
+        m_memDC.DeleteDC();
+    }
+
+    if (m_memBitmap.GetSafeHandle())
+    {
+        m_memBitmap.DeleteObject();
+    }
+
+    m_memDC.CreateCompatibleDC(&dc);
+
+    CRect rect;
+    m_staticVideo.GetClientRect(&rect);
+
+    m_memBitmap.CreateCompatibleBitmap(&dc, rect.Width(), rect.Height());
+    m_memDC.SelectObject(&m_memBitmap);
+
+    // Fill with black
+    m_memDC.FillSolidRect(&rect, RGB(0, 0, 0));
+}
+
+void CvsBallVisionUIDlg::DrawImage()
+{
+    if (!m_memDC.GetSafeHdc())
+        return;
+
+    CRect rect;
+    m_staticVideo.GetClientRect(&rect);
+
+    std::lock_guard<std::mutex> lock(m_imageMutex);
+
+    if (m_displayBuffer.empty() || m_imageWidth <= 0 || m_imageHeight <= 0)
+    {
+        // Clear with black
+        m_memDC.FillSolidRect(&rect, RGB(0, 0, 0));
+    }
+    else
+    {
+        // Calculate scaling to fit
+        double scaleX = static_cast<double>(rect.Width()) / m_imageWidth;
+        double scaleY = static_cast<double>(rect.Height()) / m_imageHeight;
+        double scale = min(scaleX, scaleY);
+
+        int destWidth = static_cast<int>(m_imageWidth * scale);
+        int destHeight = static_cast<int>(m_imageHeight * scale);
+        int destX = (rect.Width() - destWidth) / 2;
+        int destY = (rect.Height() - destHeight) / 2;
+
+        // Clear background
+        m_memDC.FillSolidRect(&rect, RGB(0, 0, 0));
+
+        // Create bitmap from image data
+        BITMAPINFO bmi = { 0 };
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = m_imageWidth;
+        bmi.bmiHeader.biHeight = -m_imageHeight; // Top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 24;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        // Draw image
+        SetStretchBltMode(m_memDC.GetSafeHdc(), HALFTONE);
+        StretchDIBits(m_memDC.GetSafeHdc(),
+            destX, destY, destWidth, destHeight,
+            0, 0, m_imageWidth, m_imageHeight,
+            m_displayBuffer.data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
+    }
+
+    // Copy to screen
+    CClientDC dc(&m_staticVideo);
+    dc.BitBlt(0, 0, rect.Width(), rect.Height(), &m_memDC, 0, 0, SRCCOPY);
+}
+
+void CvsBallVisionUIDlg::OnImageCallback(const CvsBallVision::ImageData& imageData)
+{
+    // 데이터 유효성 검사 추가
+    if (!imageData.pData || imageData.width <= 0 || imageData.height <= 0)
+        return;
+
+    std::lock_guard<std::mutex> lock(m_imageMutex);
+
+    // Update dimensions
+    m_imageWidth = imageData.width;
+    m_imageHeight = imageData.height;
+
+    // Copy image data
+    int dataSize = imageData.width * imageData.height * 3;
+    m_displayBuffer.resize(dataSize);
+
+    if (imageData.channels == 3)
+    {
+        // RGB data - copy directly
+        memcpy(m_displayBuffer.data(), imageData.pData, dataSize);
+    }
+    else if (imageData.channels == 1)
+    {
+        // Grayscale - convert to RGB
+        for (int i = 0; i < imageData.width * imageData.height; i++)
+        {
+            uint8_t gray = imageData.pData[i];
+            m_displayBuffer[i * 3] = gray;
+            m_displayBuffer[i * 3 + 1] = gray;
+            m_displayBuffer[i * 3 + 2] = gray;
+        }
+    }
+
+    m_bImageUpdated = true;
+
+    // Post message to update UI
+    PostMessage(WM_IMAGE_RECEIVED);
+}
+
+void CvsBallVisionUIDlg::OnErrorCallback(int errorCode, const std::string& errorMsg)
+{
+    CString msg;
+    msg.Format(_T("Error %d: %s"), errorCode, CString(errorMsg.c_str()));
+    m_staticStatus.SetWindowText(msg);
+}
+
+void CvsBallVisionUIDlg::OnStatusCallback(const std::string& status)
+{
+    m_statusText = CString(status.c_str());
+    m_staticStatus.SetWindowText(m_statusText);
+}
+
+void CvsBallVisionUIDlg::OnBnClickedButtonConnect()
+{
+    int sel = m_comboCameraList.GetCurSel();
+    if (sel < 0 || sel >= static_cast<int>(m_cameraList.size()))
+    {
+        AfxMessageBox(_T("Please select a camera"), MB_ICONWARNING);
+        return;
+    }
+
+    if (m_pCamera->ConnectCamera(m_cameraList[sel].enumIndex))
+    {
+        UpdateParameterRanges();
+        UpdateParameterValues();
+        UpdateUIState();
+
+        // Apply default settings
+        ApplySettings();
+    }
+    else
+    {
+        AfxMessageBox(_T("Failed to connect to camera"), MB_ICONERROR);
+    }
+}
+
+void CvsBallVisionUIDlg::OnBnClickedButtonDisconnect()
+{
+    if (m_pCamera->IsAcquiring())
+    {
+        m_pCamera->StopAcquisition();
+    }
+
+    m_pCamera->DisconnectCamera();
+    UpdateUIState();
+
+    // Clear display
+    {
+        std::lock_guard<std::mutex> lock(m_imageMutex);
+        m_displayBuffer.clear();
+    }
+    DrawImage();
+}
+
+void CvsBallVisionUIDlg::OnBnClickedButtonStart()
+{
+    // UI 업데이트 전 이미지 버퍼 초기화
+    {
+        std::lock_guard<std::mutex> lock(m_imageMutex);
+        m_displayBuffer.clear();
+        m_bImageUpdated = false;
+    }
+
+    if (m_pCamera->StartAcquisition())
+    {
+        UpdateUIState();
+    }
+    else
+    {
+        AfxMessageBox(_T("Failed to start acquisition"), MB_ICONERROR);
+    }
+}
+
+void CvsBallVisionUIDlg::OnBnClickedButtonStop()
+{
+    m_pCamera->StopAcquisition();
+
+    // Stop 후 디스플레이 버퍼 유지 (마지막 프레임 표시)
+    // 필요시 아래 주석 해제하여 화면 클리어
+    /*
+    {
+        std::lock_guard<std::mutex> lock(m_imageMutex);
+        m_displayBuffer.clear();
+        m_bImageUpdated = true;
+    }
+    DrawImage();
+    */
+
+    UpdateUIState();
+}
+
+void CvsBallVisionUIDlg::OnBnClickedButtonRefresh()
+{
+    UpdateCameraList();
+}
+
+void CvsBallVisionUIDlg::OnBnClickedButtonApplySettings()
+{
+    ApplySettings();
+}
+
+void CvsBallVisionUIDlg::OnBnClickedButtonSaveSettings()
+{
+    CFileDialog dlg(FALSE, _T("json"), _T("camera_settings.json"),
+        OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT,
+        _T("JSON Files (*.json)|*.json|All Files (*.*)|*.*||"));
+
+    if (dlg.DoModal() == IDOK)
+    {
+        CString filePath = dlg.GetPathName();
+        if (m_pCamera->SaveParameters(CStringA(filePath).GetString()))
+        {
+            AfxMessageBox(_T("Settings saved successfully"), MB_ICONINFORMATION);
+        }
+        else
+        {
+            AfxMessageBox(_T("Failed to save settings"), MB_ICONERROR);
+        }
+    }
+}
+
+void CvsBallVisionUIDlg::OnBnClickedButtonLoadSettings()
+{
+    CFileDialog dlg(TRUE, _T("json"), nullptr,
+        OFN_HIDEREADONLY | OFN_FILEMUSTEXIST,
+        _T("JSON Files (*.json)|*.json|All Files (*.*)|*.*||"));
+
+    if (dlg.DoModal() == IDOK)
+    {
+        CString filePath = dlg.GetPathName();
+        if (m_pCamera->LoadParameters(CStringA(filePath).GetString()))
+        {
+            UpdateParameterValues();
+            AfxMessageBox(_T("Settings loaded successfully"), MB_ICONINFORMATION);
+        }
+        else
+        {
+            AfxMessageBox(_T("Failed to load settings"), MB_ICONERROR);
+        }
+    }
+}
+
+void CvsBallVisionUIDlg::OnCbnSelchangeComboCameraList()
+{
+    // Camera selection changed
+}
+
+void CvsBallVisionUIDlg::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar)
+{
+    if (!m_pCamera || !m_pCamera->IsConnected())
+    {
+        CDialogEx::OnHScroll(nSBCode, nPos, pScrollBar);
+        return;
+    }
+
+    CSliderCtrl* pSlider = (CSliderCtrl*)pScrollBar;
+    int pos = pSlider->GetPos();
+    CString str;
+
+    if (pSlider == &m_sliderExposure)
+    {
+        double exposure = static_cast<double>(pos);
+        m_pCamera->SetExposureTime(exposure);
+
+        str.Format(_T("%.0f"), exposure);
+        m_editExposure.SetWindowText(str);
+
+        str.Format(_T("%.0f μs"), exposure);
+        m_staticExposureValue.SetWindowText(str);
+    }
+    else if (pSlider == &m_sliderGain)
+    {
+        double gain = pos / 10.0;
+        m_pCamera->SetGain(gain);
+
+        str.Format(_T("%.1f"), gain);
+        m_editGain.SetWindowText(str);
+
+        str.Format(_T("%.1f dB"), gain);
+        m_staticGainValue.SetWindowText(str);
+    }
+    else if (pSlider == &m_sliderFps)
+    {
+        double fps = static_cast<double>(pos);
+        m_pCamera->SetFrameRate(fps);
+
+        str.Format(_T("%.0f"), fps);
+        m_editFps.SetWindowText(str);
+
+        str.Format(_T("%.0f fps"), fps);
+        m_staticFpsValue.SetWindowText(str);
+    }
+
+    CDialogEx::OnHScroll(nSBCode, nPos, pScrollBar);
+}
+
+void CvsBallVisionUIDlg::OnTimer(UINT_PTR nIDEvent)
+{
+    if (nIDEvent == TIMER_UPDATE_UI)
+    {
+        UpdateStatistics();
+
+        if (m_bImageUpdated)
+        {
+            m_bImageUpdated = false;
+            DrawImage();
         }
     }
 
     CDialogEx::OnTimer(nIDEvent);
 }
 
-void CCvsBallVisionUIDlg::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar)
-{
-    if (pScrollBar == (CScrollBar*)&m_sliderGain) {
-        int pos = m_sliderGain.GetPos();
-        m_gainValue = pos / 10.0;
-        CString str;
-        str.Format(_T("%.1f"), m_gainValue);
-        m_editGain.SetWindowText(str);
-    }
-    else if (pScrollBar == (CScrollBar*)&m_sliderExposure) {
-        int pos = m_sliderExposure.GetPos();
-        m_exposureValue = static_cast<double>(pos);
-        CString str;
-        str.Format(_T("%.1f"), m_exposureValue);
-        m_editExposure.SetWindowText(str);
-    }
-    else if (pScrollBar == (CScrollBar*)&m_sliderFps) {
-        int pos = m_sliderFps.GetPos();
-        m_fpsValue = pos / 10.0;
-        CString str;
-        str.Format(_T("%.1f"), m_fpsValue);
-        m_editFps.SetWindowText(str);
-    }
-
-    CDialogEx::OnHScroll(nSBCode, nPos, pScrollBar);
-}
-
-void CCvsBallVisionUIDlg::OnBnClickedBtnConnect()
-{
-    if (!m_pCamera) {
-        MessageBox(_T("Camera object not initialized"), _T("Error"), MB_ICONERROR);
-        return;
-    }
-
-    SetStatusText(_T("Connecting to camera..."));
-
-    // Enumerate available cameras
-    std::vector<std::string> cameras;
-    if (!m_pCamera->EnumerateCameras(cameras)) {
-        SetStatusText(_T("No cameras found"));
-        MessageBox(_T("No cameras found. Please check connection."), _T("Error"), MB_ICONERROR);
-        return;
-    }
-
-    // Connect to first available camera
-    if (m_pCamera->ConnectCamera()) {
-        m_bConnected = true;
-
-        // Get camera info
-        CString info;
-        info.Format(_T("Connected to %s"), CString(m_pCamera->GetCameraModel().c_str()));
-        SetStatusText(info);
-
-        // Set default resolution
-        m_pCamera->SetImageSize(1280, 880);
-        m_staticResolution.SetWindowText(_T("Resolution: 1280 x 880"));
-
-        // Set default parameters
-        m_pCamera->SetFrameRate(100.0);
-        m_pCamera->SetExposureTime(1000.0);
-        m_pCamera->SetGain(0.0);
-
-        UpdateControls();
-    }
-    else {
-        SetStatusText(_T("Failed to connect"));
-        CString error(m_pCamera->GetLastError().c_str());
-        MessageBox(_T("Failed to connect: ") + error, _T("Error"), MB_ICONERROR);
-    }
-}
-
-void CCvsBallVisionUIDlg::OnBnClickedBtnDisconnect()
-{
-    if (!m_pCamera) return;
-
-    if (m_pCamera->IsAcquiring()) {
-        m_pCamera->StopAcquisition();
-        m_bAcquiring = false;
-    }
-
-    if (m_pCamera->DisconnectCamera()) {
-        m_bConnected = false;
-        SetStatusText(_T("Disconnected"));
-        m_staticResolution.SetWindowText(_T("Resolution: -"));
-        m_staticFpsDisplay.SetWindowText(_T("FPS: -"));
-
-        // Clear display
-        if (m_pImageWnd) {
-            m_pImageWnd->Clear();
-        }
-
-        UpdateControls();
-    }
-}
-
-void CCvsBallVisionUIDlg::OnBnClickedBtnStart()
-{
-    if (!m_pCamera || !m_pCamera->IsConnected()) {
-        MessageBox(_T("Camera not connected"), _T("Error"), MB_ICONERROR);
-        return;
-    }
-
-    SetStatusText(_T("Starting acquisition..."));
-
-    // Reset frame counter
-    m_frameCount = 0;
-    m_lastFpsTime = GetTickCount();
-
-    if (m_pCamera->StartAcquisition()) {
-        m_bAcquiring = true;
-        SetStatusText(_T("Acquiring"));
-        UpdateControls();
-    }
-    else {
-        SetStatusText(_T("Failed to start acquisition"));
-        CString error(m_pCamera->GetLastError().c_str());
-        MessageBox(_T("Failed to start: ") + error, _T("Error"), MB_ICONERROR);
-    }
-}
-
-void CCvsBallVisionUIDlg::OnBnClickedBtnStop()
-{
-    if (!m_pCamera) return;
-
-    if (m_pCamera->StopAcquisition()) {
-        m_bAcquiring = false;
-        SetStatusText(_T("Stopped"));
-        UpdateControls();
-    }
-}
-
-void CCvsBallVisionUIDlg::OnBnClickedBtnApplySettings()
-{
-    if (!ValidateSettings()) {
-        return;
-    }
-
-    ApplyCameraSettings();
-}
-
-void CCvsBallVisionUIDlg::OnEnChangeEditGain()
-{
-    CString str;
-    m_editGain.GetWindowText(str);
-    double value = _tstof(str);
-
-    if (value >= 0.0 && value <= 56.0) {
-        m_gainValue = value;
-        m_sliderGain.SetPos(static_cast<int>(value * 10));
-    }
-}
-
-void CCvsBallVisionUIDlg::OnEnChangeEditExposure()
-{
-    CString str;
-    m_editExposure.GetWindowText(str);
-    double value = _tstof(str);
-
-    if (value >= 1.0 && value <= 30000.0) {
-        m_exposureValue = value;
-        m_sliderExposure.SetPos(static_cast<int>(value));
-    }
-}
-
-void CCvsBallVisionUIDlg::OnEnChangeEditFps()
-{
-    CString str;
-    m_editFps.GetWindowText(str);
-    double value = _tstof(str);
-
-    if (value >= 1.0 && value <= 100.0) {
-        m_fpsValue = value;
-        m_sliderFps.SetPos(static_cast<int>(value * 10));
-    }
-}
-
-LRESULT CCvsBallVisionUIDlg::OnImageUpdate(WPARAM wParam, LPARAM lParam)
-{
-    // Image update is handled directly in the callback
-    return 0;
-}
-
-void CCvsBallVisionUIDlg::OnFrameReceived(const ImageData& imageData)
-{
-    // Increment frame counter
-    m_frameCount++;
-
-    // Update display
-    if (m_pImageWnd && imageData.pData) {
-        // Convert to display format if needed
-        if (imageData.pixelFormat == 0) {  // Mono8
-            m_pImageWnd->SetImage(imageData.pData, imageData.width, imageData.height, 8);
-        }
-        else {
-            // Handle other formats as needed
-            m_pImageWnd->SetImage(imageData.pData, imageData.width, imageData.height, 8);
-        }
-    }
-}
-
-void CCvsBallVisionUIDlg::UpdateControls()
-{
-    BOOL bConnected = m_bConnected;
-    BOOL bAcquiring = m_bAcquiring;
-
-    m_btnConnect.EnableWindow(!bConnected);
-    m_btnDisconnect.EnableWindow(bConnected && !bAcquiring);
-    m_btnStart.EnableWindow(bConnected && !bAcquiring);
-    m_btnStop.EnableWindow(bConnected && bAcquiring);
-
-    EnableCameraControls(bConnected && !bAcquiring);
-}
-
-void CCvsBallVisionUIDlg::EnableCameraControls(BOOL bEnable)
-{
-    m_editGain.EnableWindow(bEnable);
-    m_editExposure.EnableWindow(bEnable);
-    m_editFps.EnableWindow(bEnable);
-    m_sliderGain.EnableWindow(bEnable);
-    m_sliderExposure.EnableWindow(bEnable);
-    m_sliderFps.EnableWindow(bEnable);
-    m_btnApplySettings.EnableWindow(bEnable);
-}
-
-bool CCvsBallVisionUIDlg::ValidateSettings()
-{
-    // Validate gain
-    if (m_gainValue < 0.0 || m_gainValue > 56.0) {
-        MessageBox(_T("Gain must be between 0 and 56 dB"), _T("Invalid Setting"), MB_ICONWARNING);
-        return false;
-    }
-
-    // Validate exposure time
-    if (m_exposureValue < 1.0 || m_exposureValue > 3000000.0) {
-        MessageBox(_T("Exposure time must be between 1 and 3000000 μs"), _T("Invalid Setting"), MB_ICONWARNING);
-        return false;
-    }
-
-    // Validate frame rate
-    if (m_fpsValue < 1.0 || m_fpsValue > 100.0) {
-        MessageBox(_T("Frame rate must be between 1 and 100 fps"), _T("Invalid Setting"), MB_ICONWARNING);
-        return false;
-    }
-
-    return true;
-}
-
-void CCvsBallVisionUIDlg::ApplyCameraSettings()
-{
-    if (!m_pCamera || !m_pCamera->IsConnected()) {
-        return;
-    }
-
-    bool success = true;
-    CString errorMsg;
-
-    // Apply gain
-    if (!m_pCamera->SetGain(m_gainValue)) {
-        success = false;
-        errorMsg += _T("Failed to set gain\n");
-    }
-
-    // Apply exposure time
-    if (!m_pCamera->SetExposureTime(m_exposureValue)) {
-        success = false;
-        errorMsg += _T("Failed to set exposure time\n");
-    }
-
-    // Apply frame rate
-    if (!m_pCamera->SetFrameRate(m_fpsValue)) {
-        success = false;
-        errorMsg += _T("Failed to set frame rate\n");
-    }
-
-    if (success) {
-        SetStatusText(_T("Settings applied successfully"));
-    }
-    else {
-        SetStatusText(_T("Failed to apply some settings"));
-        MessageBox(errorMsg, _T("Settings Error"), MB_ICONWARNING);
-    }
-}
-
-void CCvsBallVisionUIDlg::SetStatusText(const CString& text)
-{
-    m_staticStatus.SetWindowText(text);
-}
-
-// CImageDisplayWnd implementation
-CImageDisplayWnd::CImageDisplayWnd()
-    : m_imageWidth(0)
-    , m_imageHeight(0)
-    , m_imageBpp(8)
-    , m_bHasImage(false)
-{
-}
-
-CImageDisplayWnd::~CImageDisplayWnd()
-{
-}
-
-BEGIN_MESSAGE_MAP(CImageDisplayWnd, CWnd)
-    ON_WM_PAINT()
-    ON_WM_ERASEBKGND()
-END_MESSAGE_MAP()
-
-BOOL CImageDisplayWnd::Create(CWnd* pParent, const CRect& rect)
-{
-    return CreateEx(0, AfxRegisterWndClass(0), _T(""),
-        WS_CHILD | WS_VISIBLE | WS_BORDER,
-        rect, pParent, 0);
-}
-
-void CImageDisplayWnd::SetImage(const BYTE* pData, int width, int height, int bpp)
-{
-    if (!pData || width <= 0 || height <= 0) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(m_imageMutex);
-
-    m_imageWidth = width;
-    m_imageHeight = height;
-    m_imageBpp = bpp;
-
-    size_t imageSize = width * height * (bpp / 8);
-    m_imageBuffer.resize(imageSize);
-    memcpy(m_imageBuffer.data(), pData, imageSize);
-
-    m_bHasImage = true;
-
-    // Trigger repaint
-    InvalidateRect(nullptr, FALSE);
-}
-
-void CImageDisplayWnd::Clear()
-{
-    std::lock_guard<std::mutex> lock(m_imageMutex);
-    m_bHasImage = false;
-    m_imageBuffer.clear();
-    InvalidateRect(nullptr, TRUE);
-}
-
-void CImageDisplayWnd::OnPaint()
+void CvsBallVisionUIDlg::OnPaint()
 {
     CPaintDC dc(this);
-    CRect rect;
-    GetClientRect(&rect);
 
-    std::lock_guard<std::mutex> lock(m_imageMutex);
-
-    if (m_bHasImage && !m_imageBuffer.empty()) {
-        // Create bitmap info for 8-bit grayscale
-        BITMAPINFO bmi;
-        memset(&bmi, 0, sizeof(BITMAPINFO));
-        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = m_imageWidth;
-        bmi.bmiHeader.biHeight = -m_imageHeight; // Top-down bitmap
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 8;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        // Set grayscale palette
-        for (int i = 0; i < 256; i++) {
-            bmi.bmiColors[i].rgbRed = i;
-            bmi.bmiColors[i].rgbGreen = i;
-            bmi.bmiColors[i].rgbBlue = i;
-            bmi.bmiColors[i].rgbReserved = 0;
-        }
-
-        // Calculate aspect ratio preserving dimensions
-        double scaleX = (double)rect.Width() / m_imageWidth;
-        double scaleY = (double)rect.Height() / m_imageHeight;
-        double scale = min(scaleX, scaleY);
-
-        int drawWidth = (int)(m_imageWidth * scale);
-        int drawHeight = (int)(m_imageHeight * scale);
-        int drawX = (rect.Width() - drawWidth) / 2;
-        int drawY = (rect.Height() - drawHeight) / 2;
-
-        // Draw the image
-        SetStretchBltMode(dc.GetSafeHdc(), HALFTONE);
-        StretchDIBits(dc.GetSafeHdc(),
-            drawX, drawY, drawWidth, drawHeight,
-            0, 0, m_imageWidth, m_imageHeight,
-            m_imageBuffer.data(), &bmi,
-            DIB_RGB_COLORS, SRCCOPY);
-    }
-    else {
-        // Draw placeholder
-        dc.FillSolidRect(&rect, RGB(64, 64, 64));
-
-        dc.SetBkMode(TRANSPARENT);
-        dc.SetTextColor(RGB(192, 192, 192));
-
-        CString str = _T("No Video Signal");
-        CFont font;
-        font.CreatePointFont(200, _T("Arial"));
-        CFont* pOldFont = dc.SelectObject(&font);
-
-        dc.DrawText(str, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        dc.SelectObject(pOldFont);
-    }
+    // Draw image if available
+    DrawImage();
 }
 
-BOOL CImageDisplayWnd::OnEraseBkgnd(CDC* pDC)
+HBRUSH CvsBallVisionUIDlg::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
 {
-    return TRUE;  // Prevent flicker
+    HBRUSH hbr = CDialogEx::OnCtlColor(pDC, pWnd, nCtlColor);
+
+    // Customize colors if needed
+
+    return hbr;
+}
+
+LRESULT CvsBallVisionUIDlg::OnImageReceived(WPARAM wParam, LPARAM lParam)
+{
+    // Image received notification
+    // Drawing is handled in OnTimer for better performance
+
+    return 0;
 }

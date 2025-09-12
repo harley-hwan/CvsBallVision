@@ -1,0 +1,1548 @@
+(CallbackGrab.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+// Grab function
+void GrabFunction(int32_t eventID, const CVS_BUFFER* pBuffer, void* pUserDefine)
+{
+	if (eventID != EVENT_NEW_IMAGE)
+		return;
+
+	// Print Image(0,0) data			
+	printf("BlockID = %llu Timestamp = %llu Image(0,0) = %d\n", pBuffer->blockID, pBuffer->timestamp, ((unsigned char*)(pBuffer->image.pImage))[0]);
+}
+
+// Close
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+
+	// Set callback function
+	status = ST_RegisterGrabCallback(hDevice, EVENT_NEW_IMAGE, GrabFunction, NULL);
+	CVS_CHECK(status);
+
+	printf("Callback Grab\n");
+	printf("-----------------------------\n\n");
+	printf("Press <Enter> to start.\n");
+	_getch();
+
+	// Acquisition start
+	status = ST_AcqStart(hDevice);
+	CVS_CHECK(status);
+		
+	while (true)
+	{
+		// To wait
+		Sleep(100);
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+
+	// Acquisition stop
+	status = ST_AcqStop(hDevice);
+	CVS_CHECK(status);
+		
+	// Unregister callback function
+	status = ST_UnregisterGrabCallback(hDevice, EVENT_NEW_IMAGE);
+	CVS_CHECK(status);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
+(ColorConvert.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+	CVS_BUFFER buffer = { NULL };
+	CVS_BUFFER destBuffer = { NULL };
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+
+	printf("Color Convert\n");
+	printf("-----------------------------\n\n");
+	printf("Press <Enter> to start.\n");
+	_getch();
+
+	// Init buffer
+	status = ST_InitBuffer(hDevice, &buffer);
+	CVS_CHECK(status);
+
+	// Init color buffer
+	status = ST_InitBuffer(hDevice, &destBuffer, 3);
+	CVS_CHECK(status);
+
+	// Acquisition start
+	status = ST_AcqStart(hDevice);
+	CVS_CHECK(status);
+
+	// Grab loop
+	while (true)
+	{
+		// Grab image
+		status = ST_GrabImage(hDevice, &buffer);
+		if (status == MCAM_ERR_TIMEOUT)
+		{
+			printf("GrabImage timeout : %d\n", status);
+			if (_kbhit())
+			{
+				break;
+			}
+			continue;
+		}
+		CVS_CHECK(status);
+
+		// Print Image(0,0) data
+		ST_CvtColor(buffer, &destBuffer, CVP_BayerRG2RGB);
+		printf("BlockID = %llu TimeStamp = %llu Image(0,0) R = %d G = %d B = %d \n", destBuffer.blockID, destBuffer.timestamp, ((unsigned char*)(destBuffer.image.pImage))[0], ((unsigned char*)(destBuffer.image.pImage))[1], ((unsigned char*)(destBuffer.image.pImage))[2]);
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+
+	// Acquisition stop
+	status = ST_AcqStop(hDevice);
+	CVS_CHECK(status);
+
+	// Free buffer
+	status = ST_FreeBuffer(&buffer);
+	CVS_CHECK(status);
+
+	// Free color buffer
+	status = ST_FreeBuffer(&destBuffer);
+	CVS_CHECK(status);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
+(DeviceInformation.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+// Get information before open
+void GetInformationBeforeOpen(uint32_t EnumNum)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	uint32_t size;
+	char pDeviceInfo[256];
+
+	size = 256;
+	status = ST_GetEnumDeviceInfo(EnumNum, MCAM_DEVICEINFO_USER_ID, pDeviceInfo, &size);
+	CVS_CHECK(status);
+	printf("User ID : %s\n", pDeviceInfo);
+
+	size = 256;
+	status = ST_GetEnumDeviceInfo(EnumNum, MCAM_DEVICEINFO_MODEL_NAME, pDeviceInfo, &size);
+	CVS_CHECK(status);
+	printf("Model Name : %s\n", pDeviceInfo);
+
+	size = 256;
+	status = ST_GetEnumDeviceInfo(EnumNum, MCAM_DEVICEINFO_SERIAL_NUMBER, pDeviceInfo, &size);
+	CVS_CHECK(status);
+	printf("Serial Number : %s\n", pDeviceInfo);
+
+	size = 256;
+	status = ST_GetEnumDeviceInfo(EnumNum, MCAM_DEVICEINFO_DEVICE_VERSION, pDeviceInfo, &size);
+	CVS_CHECK(status);
+	printf("Devcei Version : %s\n", pDeviceInfo);
+
+	// Device Mac Address : GigE Only
+	size = 256;
+	status = ST_GetEnumDeviceInfo(EnumNum, MCAM_DEVICEINFO_MAC_ADDRESS, pDeviceInfo, &size);
+	CVS_CHECK(status);
+	printf("Mac Address : %s\n", pDeviceInfo);
+
+	// Device IP Address : GigE Only
+	size = 256;
+	status = ST_GetEnumDeviceInfo(EnumNum, MCAM_DEVICEINFO_IP_ADDRESS, pDeviceInfo, &size);
+	CVS_CHECK(status);
+	printf("IP Address : %s\n", pDeviceInfo);
+}
+
+// Get information after open
+void GetInformationAfterOpen(int32_t hDevice, uint32_t EnumNum)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	uint32_t size;
+	char pInfo[256];
+
+	size = 256;
+	status = ST_GetStrReg(hDevice, "DeviceModelName", pInfo, &size);
+	CVS_CHECK(status);
+	printf("Device Model Name : %s\n", pInfo);
+
+	size = 256;
+	status = ST_GetStrReg(hDevice, "DeviceID", pInfo, &size);
+	CVS_CHECK(status);
+	printf("Device ID : %s\n", pInfo);
+
+	size = 256;
+	status = ST_GetStrReg(hDevice, "DeviceVersion", pInfo, &size);
+	CVS_CHECK(status);
+	printf("Device Version : %s\n", pInfo);
+		
+	size = 256;
+	status = ST_GetStrReg(hDevice, "DeviceVendorName", pInfo, &size);
+	CVS_CHECK(status);
+	printf("Device Vendor Name : %s\n", pInfo);
+
+	size = 256;
+	status = ST_GetStrReg(hDevice, "DeviceManufacturerInfo", pInfo, &size);
+	CVS_CHECK(status);
+	printf("Device Manufacture Info : %s\n", pInfo);
+
+	size = 256;
+	status = ST_GetStrReg(hDevice, "DeviceUserID", pInfo, &size);
+	CVS_CHECK(status);
+	printf("Device User ID : %s\n", pInfo);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+		
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+		
+	// Number 0 check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+		
+	// Get information before camera open
+	uint32_t EnumNum = 0;
+	GetInformationBeforeOpen(EnumNum);
+
+	// Open device
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+
+	// Get information after camera open
+	GetInformationAfterOpen(hDevice, EnumNum);
+			   
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
+(FeatureControl.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+// Set feature
+void SetFeature(int32_t hDevice)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+
+	// Integer Featrue
+	status = ST_SetIntReg(hDevice, "Width", 640);
+	CVS_CHECK(status);
+
+	// Float Featrue
+	status = ST_SetFloatReg(hDevice, "ExposureTime", 3000.0f);
+	CVS_CHECK(status);
+
+	// Boolean Featrue
+	status = ST_SetBoolReg(hDevice, "GammaEnable", true);
+	CVS_CHECK(status);
+
+	// Enumeration Feature
+	status = ST_SetEnumReg(hDevice, "PixelFormat", (char*)"Mono8");
+	CVS_CHECK(status);
+
+	// Command Feature(Write Only)
+	status = ST_SetCmdReg(hDevice, "TriggerSoftware");
+	CVS_CHECK(status);
+}
+
+// Get feature
+void GetFeature(int32_t hDevice)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int64_t	iVal = 0;
+	double	fVal = 0;
+	bool bVal = false;		
+	char pInfo[256] = { NULL, };
+	uint32_t size = 256;
+
+	// Integer Featrue
+	status = ST_GetIntReg(hDevice, "Width", &iVal);
+	CVS_CHECK(status);
+	printf("Width : %lld\n", iVal);
+
+	// Float Featrue
+	status = ST_GetFloatReg(hDevice, "ExposureTime", &fVal);
+	CVS_CHECK(status);
+	printf("ExposureTime : %.1f\n", fVal);
+
+	// Boolean Featrue
+	status = ST_SetBoolReg(hDevice, "GammaEnable", &bVal);
+	CVS_CHECK(status);
+	printf("GammaEnable : %s\n", bVal == true ? "true" : "false");
+			
+	// Enumeration Feature
+	size = 256;
+	status = ST_GetEnumReg(hDevice, "PixelFormat", pInfo, &size);
+	CVS_CHECK(status);
+	printf("PixelFormat : %s\n", pInfo);
+
+	// String Feature(Read Only)	
+	size = 256;
+	status = ST_GetStrReg(hDevice, "DeviceModelName", pInfo, &size);
+	CVS_CHECK(status);
+	printf("Device Model Name : %s\n", pInfo);
+}
+
+// Get feature range
+void GetFeatureRange(int32_t hDevice)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int64_t iMin = 0, iMax = 0, iInc = 0;
+	double fMin = 0, fMax = 0;
+	int32_t entrySize = 0;
+	int32_t Val = 0;
+	char pInfo[256] = { NULL, };
+	uint32_t size = 256;
+
+	// Integer Featrue : Minimum, Maximum, Increment
+	status = ST_GetIntRegRange(hDevice, "Width", &iMin, &iMax, &iInc);
+	CVS_CHECK(status);
+	printf("Width Range : Minimum = %lld\tMaximum = %lld\tIncrement = %lld\t\n", iMin, iMax, iInc);
+
+	// Float Feature : Minimum, Maximum
+	status = ST_GetFloatRegRange(hDevice, "ExposureTime", &fMin, &fMax);
+	CVS_CHECK(status);
+	printf("ExposureTime Range : Minimum = %.1f\tMaximum = %.1f\n", fMin, fMax);
+
+	// Enumeration Fetature	: Entry size, Index, IntValue, StringValue
+	status = ST_GetEnumEntrySize(hDevice, "PixelFormat", &entrySize);
+	CVS_CHECK(status);
+	printf("PixelFormat : Entry size = %d\n", entrySize);
+	printf("Index\tIntValue\tStringValue\n");
+
+	for (int i = 0; i < entrySize; i++)
+	{
+		status = ST_GetEnumEntryIntValue(hDevice, "PixelFormat", i, &Val);
+		CVS_CHECK(status);
+
+		size = 256;
+		status = ST_GetEnumEntryValue(hDevice, "PixelFormat", i, pInfo, &size);
+		CVS_CHECK(status);
+		printf("%d\t0x%X\t%s\n", i, Val, pInfo);
+	}
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+
+	// Set feature
+	SetFeature(hDevice);
+
+	// Get feature
+	GetFeature(hDevice);
+
+	// Get feature range
+	GetFeatureRange(hDevice);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
+(JsonImportExport.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include <shlobj.h> // for SHGetFolderPathA()
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintError
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintError( err )
+void PrintError(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number 0 check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+	
+	// Get desktop directory
+	char path[MAX_PATH];
+	HRESULT result = SHGetFolderPathA(NULL, CSIDL_DESKTOPDIRECTORY, NULL, SHGFP_TYPE_CURRENT, path);
+	if (result != S_OK)
+	{
+		printf("Error : Fail to get Desktop directory");
+		return 0;
+	}
+
+	// filePath
+	char filePath[MAX_PATH];
+	snprintf(filePath, sizeof(filePath), "%s\\CameraFeatures.json", path);
+
+	// Export
+	status = ST_ExportJson(hDevice, filePath);
+	CVS_CHECK(status);
+
+	// Import
+	status = ST_ImportJson(hDevice, filePath);
+	CVS_CHECK(status);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
+(MulticastController.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+	CVS_BUFFER buffer = { NULL };
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDeviceMulticast(EnumNum, &hDevice, AccessControl, "239.192.1.1", 1042);
+	CVS_CHECK(status);
+			
+	printf("Multicast controller.\n");
+	printf("-----------------------------\n\n");
+	printf("Press <Enter> to start.\n");
+	_getch();
+	
+	// Acquisition start
+	status = ST_AcqStart(hDevice);
+	CVS_CHECK(status);
+
+	// Grab loop
+	while (true)
+	{
+		Sleep(100);
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+	
+	// Acquisition stop
+	status = ST_AcqStop(hDevice);
+	CVS_CHECK(status);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');	
+}
+
+
+
+(MulticastReceiver.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+	CVS_BUFFER buffer = { NULL };
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDeviceMulticast(0, &hDevice, AccessReadOnly, "239.192.1.1", 1042, true);
+	CVS_CHECK(status);
+			
+	printf("Multicast receiver.\n");
+	printf("-----------------------------\n\n");
+	printf("Press <Enter> to start.\n");
+	_getch();
+	
+	// Init buffer
+	status = ST_InitBuffer(hDevice, &buffer);
+	CVS_CHECK(status);
+
+	// Acquisition start
+	status = ST_AcqStart(hDevice);
+	CVS_CHECK(status);
+
+	// Grab loop
+	while (!_kbhit())
+	{
+		// Grab image
+		status = ST_GrabImage(hDevice, &buffer);
+		if (status == MCAM_ERR_TIMEOUT)
+		{
+			printf("GrabImage timeout : %d\n", status);
+			continue;
+		}
+		CVS_CHECK(status);
+
+		// Print Image(0,0) data			
+		printf("BlockID = %llu TimeStamp = %llu Image(0,0) = %d\n", buffer.blockID, buffer.timestamp, ((unsigned char*)(buffer.image.pImage))[0]);
+	}
+	
+	// Acquisition stop
+	status = ST_AcqStop(hDevice);
+	CVS_CHECK(status);
+
+	// Free buffer
+	status = ST_FreeBuffer(&buffer);
+	CVS_CHECK(status);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');	
+}
+
+
+
+(MultipleCameras.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;	
+	int32_t* hDevice = NULL;
+	uint32_t CamNum = 0;
+	CVS_BUFFER* pBuffer = NULL;
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// hDevice allocatation
+	hDevice = (int32_t*)malloc(sizeof(int32_t) * CamNum);
+	memset((void*)hDevice, 0, sizeof(int32_t) * CamNum);
+
+	// pBuffer allocatation
+	pBuffer = (CVS_BUFFER*)malloc(sizeof(CVS_BUFFER) * CamNum);
+	memset((void*)pBuffer, 0, sizeof(CVS_BUFFER) * CamNum);
+
+	// Open device
+	for (uint32_t i = 0; i < CamNum; i++)
+	{
+		status = ST_OpenDevice(i, &hDevice[i]);
+		CVS_CHECK(status);
+	}
+
+	printf("Multiple Cameras\n");
+	printf("-----------------------------\n\n");
+	printf("Press <Enter> to start.\n");
+	_getch();
+
+	// Acquisition start
+	for (uint32_t i = 0; i < CamNum; i++)
+	{
+		status = ST_AcqStart(hDevice[i]);
+		CVS_CHECK(status);
+	}
+	
+	// Init buffer
+	for (uint32_t i = 0; i < CamNum; i++)
+	{
+		status = ST_InitBuffer(hDevice[i], &pBuffer[i]);
+		CVS_CHECK(status);
+	}
+
+	// Grab loop
+	while (true)
+	{
+		// Grab image
+		for (uint32_t i = 0; i < CamNum; i++)
+		{
+			status = ST_GrabImage(hDevice[i], &pBuffer[i]);
+			if (status == MCAM_ERR_TIMEOUT)
+			{
+				printf("GrabImage timeout : %d\n", status);
+				if (_kbhit())
+				{
+					break;
+				}
+				continue;
+			}
+			CVS_CHECK(status);
+
+			// Print Image(0,0) data			
+			printf("hDevice[%d] BlockID = %llu TimeStamp = %llu Image(0,0) = %d\n", i, pBuffer[i].blockID, pBuffer[i].timestamp, ((unsigned char*)(pBuffer[i].image.pImage))[0]);
+		}
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+
+	// Free pBuffer
+	for (uint32_t i = 0; i < CamNum; i++)
+	{
+		status = ST_FreeBuffer(&pBuffer[i]);
+		CVS_CHECK(status);
+	}
+
+	// Acquisition stop	
+	for (uint32_t i = 0; i < CamNum; i++)
+	{
+		status = ST_AcqStop(hDevice[i]);
+		CVS_CHECK(status);
+	}
+
+	// Close device
+	for (uint32_t i = 0; i < CamNum; i++)
+	{
+		status = ST_CloseDevice(hDevice[i]);
+		CVS_CHECK(status);
+	}
+
+	// Free hDevice
+	free(hDevice);
+
+	// Free pBuffer
+	free(pBuffer);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
+(SimpleGrab.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+	CVS_BUFFER buffer = { NULL };
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+			
+	printf("Simple Grab\n");
+	printf("-----------------------------\n\n");
+	printf("Press <Enter> to start.\n");
+	_getch();
+	
+	// Init buffer
+	status = ST_InitBuffer(hDevice, &buffer);
+	CVS_CHECK(status);
+
+	// Acquisition start
+	status = ST_AcqStart(hDevice);
+	CVS_CHECK(status);
+
+	// Grab loop
+	while (true)
+	{
+		// Grab image
+		status = ST_GrabImage(hDevice, &buffer);
+		if (status == MCAM_ERR_TIMEOUT)
+		{
+			printf("GrabImage timeout : %d\n", status);
+			if (_kbhit())
+			{
+				break;
+			}
+			continue;
+		}
+		CVS_CHECK(status);
+
+		// Print Image(0,0) data			
+		printf("BlockID = %llu TimeStamp = %llu Image(0,0) = %d\n", buffer.blockID, buffer.timestamp, ((unsigned char*)(buffer.image.pImage))[0]);
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+	
+	// Acquisition stop
+	status = ST_AcqStop(hDevice);
+	CVS_CHECK(status);
+
+	// Free buffer
+	status = ST_FreeBuffer(&buffer);
+	CVS_CHECK(status);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');	
+}
+
+
+
+(SingleGrab.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+	CVS_BUFFER buffer = { NULL };
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+
+	printf("Single Grab\n");
+	printf("-----------------------------\n\n");
+	printf("Press <Enter> to start.\n");
+	_getch();
+		
+	// Init buffer
+	status = ST_InitBuffer(hDevice, &buffer);
+	CVS_CHECK(status);
+
+	// Grab image
+	status = ST_SingleGrabImage(hDevice, &buffer);
+	CVS_CHECK(status);
+
+	// Print Image(0,0) data			
+	printf("BlockID = %llu TimeStamp = %llu Image(0,0) = %d\n", buffer.blockID, buffer.timestamp, ((unsigned char*)(buffer.image.pImage))[0]);
+
+	// Free buffer
+	status = ST_FreeBuffer(&buffer);
+	CVS_CHECK(status);
+	
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
+(Trigger.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+#define USING_FUCTION  0
+#define USING_CALLBACK 1
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+// Grab function
+void GrabFunction(int32_t eventID, const CVS_BUFFER* pBuffer, void* pUserDefine)
+{
+	if (eventID != EVENT_NEW_IMAGE)
+		return;
+
+	// Print Image(0,0) data			
+	printf("BlockID = %llu Timestamp = %llu Image(0,0) = %d\n", pBuffer->blockID, pBuffer->timestamp, ((unsigned char*)(pBuffer->image.pImage))[0]);
+}
+
+// Grab image
+void Line1(int32_t hDevice)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	CVS_BUFFER buffer = { NULL };
+
+	// Init buffer
+	status = ST_InitBuffer(hDevice, &buffer);
+	CVS_CHECK(status);
+
+	while (true)
+	{
+		// Grab image
+		status = ST_GrabImage(hDevice, &buffer);
+		if (status == MCAM_ERR_TIMEOUT)
+		{
+			printf("GrabImage timeout : %d\n", status);
+			if (_kbhit())
+			{
+				break;
+			}
+			continue;
+		}
+		CVS_CHECK(status);
+
+		// Print Image(0,0) data			
+		printf("BlockID = %llu TimeStamp = %llu Image(0,0) = %d\n", buffer.blockID, buffer.timestamp, ((unsigned char*)(buffer.image.pImage))[0]);
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+
+	// Free buffer
+	status = ST_FreeBuffer(&buffer);
+	CVS_CHECK(status);
+}
+
+void Software(int32_t hDevice)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	CVS_BUFFER buffer = { NULL };
+
+	// Init buffer
+	status = ST_InitBuffer(hDevice, &buffer);
+	CVS_CHECK(status);
+
+	while (true)
+	{
+		// Command trigger software
+		status = ST_SetCmdReg(hDevice, "TriggerSoftware");
+		CVS_CHECK(status);
+
+		// Grab image
+		status = ST_GrabImage(hDevice, &buffer);
+		if (status == MCAM_ERR_TIMEOUT)
+		{
+			printf("GrabImage timeout : %d\n", status);
+			if (_kbhit())
+			{
+				break;
+			}
+			continue;
+		}
+		CVS_CHECK(status);
+
+		// Print Image(0,0) data			
+		printf("BlockID = %llu TimeStamp = %llu Image(0,0) = %d\n", buffer.blockID, buffer.timestamp, ((unsigned char*)(buffer.image.pImage))[0]);
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+
+	// Free buffer
+	status = ST_FreeBuffer(&buffer);
+	CVS_CHECK(status);
+}
+
+void CallbackLine1(int32_t hDevice)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+
+	// Set callback function
+	status = ST_RegisterGrabCallback(hDevice, EVENT_NEW_IMAGE, GrabFunction, NULL);
+	CVS_CHECK(status);
+	
+	while (true)
+	{
+		// To wait
+		Sleep(100);
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+
+	// Unregister callback function
+	status = ST_UnregisterGrabCallback(hDevice, EVENT_NEW_IMAGE);
+	CVS_CHECK(status);
+}
+
+void CallbackSoftware(int32_t hDevice)
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+
+	// Set callback function
+	status = ST_RegisterGrabCallback(hDevice, EVENT_NEW_IMAGE, GrabFunction, NULL);
+	CVS_CHECK(status);
+
+	while (true)
+	{
+		// Command trigger software
+		status = ST_SetCmdReg(hDevice, "TriggerSoftware");
+		CVS_CHECK(status);
+
+		// _kbhit() : To stop
+		if (_kbhit())
+		{
+			break;
+		}
+	}
+
+	// Unregister callback function
+	status = ST_UnregisterGrabCallback(hDevice, EVENT_NEW_IMAGE);
+	CVS_CHECK(status);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+
+	printf("Grab Image Trigger\n");
+	printf("-----------------------------\n\n");
+	printf("Press <Enter> to start.\n");
+	_getch();
+
+	// Set feature
+	status = ST_SetEnumReg(hDevice, "TriggerMode", (char*)"On");
+	CVS_CHECK(status);
+
+	// Get feature
+	uint32_t size = 256;
+	char pInfo[256] = { NULL, };
+	status = ST_GetEnumReg(hDevice, "TriggerSource", pInfo, &size);
+	CVS_CHECK(status);
+	
+	// Acquisition start
+	status = ST_AcqStart(hDevice);
+	CVS_CHECK(status);
+
+	// Choose method (USING_FUCTION or USING_CALLBACK)
+	int method = USING_CALLBACK;
+	if (method == USING_FUCTION && strcmp(pInfo, "Line1") == 0)
+	{
+		Line1(hDevice);
+	}
+	else if (method == USING_FUCTION && strcmp(pInfo, "Software") == 0)
+	{
+		Software(hDevice);
+	}
+	else if (method == USING_CALLBACK && strcmp(pInfo, "Line1") == 0)
+	{
+		CallbackLine1(hDevice);
+	}
+	else if (method == USING_CALLBACK && strcmp(pInfo, "Software") == 0)
+	{
+		CallbackSoftware(hDevice);
+	}
+	else
+	{
+		printf("This mode is not supported.\n");
+	}
+	
+	// Acquisition stop
+	status = ST_AcqStop(hDevice);
+	CVS_CHECK(status);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
+(XmlImportExport.cpp)
+#include <stdio.h>
+#include <conio.h>
+#include <shlobj.h> // for SHGetFolderPathA()
+#include "cvsCamCtrl.h"
+#pragma comment (lib, "cvsCamCtrl.lib")
+
+// PrintErrorAndExit
+#define CVS_CHECK( err ) if ( MCAM_ERR_OK != err ) PrintErrorAndExit( err )
+void PrintErrorAndExit(CVS_ERROR err)
+{
+	// Get last error
+	printf("Error : %d\n", err);
+
+	// Free system
+	ST_FreeSystem();
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+	exit(EXIT_FAILURE);
+}
+
+int main()
+{
+	CVS_ERROR status = MCAM_ERR_OK;
+	int32_t hDevice = -1;
+	uint32_t CamNum = 0;
+
+	// Init system
+	status = ST_InitSystem();
+	CVS_CHECK(status);
+
+	// Update device list
+	status = ST_UpdateDevice();
+	CVS_CHECK(status);
+
+	// Get available camera number
+	status = ST_GetAvailableCameraNum(&CamNum);
+	CVS_CHECK(status);
+
+	// Number 0 check
+	if (CamNum <= 0)
+	{
+		printf("No device!\n");
+		CVS_CHECK(MCAM_ERR_NO_DEVICE);
+	}
+
+	// Open device
+	uint32_t EnumNum = 0;
+	status = ST_OpenDevice(EnumNum, &hDevice);
+	CVS_CHECK(status);
+		
+	// Get desktop directory
+	char path[MAX_PATH];
+	HRESULT result = SHGetFolderPathA(NULL, CSIDL_DESKTOPDIRECTORY, NULL, SHGFP_TYPE_CURRENT, path);
+	if (result != S_OK)
+	{
+		printf("Error : Fail to get Desktop directory");
+		return 0;
+	}
+
+	// filePath
+	char filePath[MAX_PATH];
+	snprintf(filePath, sizeof(filePath), "%s\\CameraFeatures.xml", path);
+
+	// Export
+	status = ST_ExportXML(hDevice, filePath);
+	CVS_CHECK(status);
+	
+	// Import
+	status = ST_ImportXML(hDevice, filePath);
+	CVS_CHECK(status);
+
+	// Close device
+	status = ST_CloseDevice(hDevice);
+	CVS_CHECK(status);
+	
+	// Free system
+	status = ST_FreeSystem();
+	CVS_CHECK(status);
+
+	// Exit
+	printf("\nPress enter to exit.\n");
+	while (getchar() != '\n');
+}
+
+
+
