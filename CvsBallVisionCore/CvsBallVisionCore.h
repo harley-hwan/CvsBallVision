@@ -29,6 +29,12 @@ namespace CvsBallVision
         constexpr double DEFAULT_FPS = 100.0;
         constexpr double DEFAULT_EXPOSURE_US = 5000.0;
         constexpr double DEFAULT_GAIN_DB = 1.0;
+        constexpr double DEFAULT_GAMMA = 1.0;
+
+        // Gamma correction parameters
+        constexpr double GAMMA_MIN = 0.1;
+        constexpr double GAMMA_MAX = 3.0;
+        constexpr double GAMMA_DEFAULT = 1.0;
 
         // Buffer management
         constexpr size_t BUFFER_POOL_SIZE = 3;
@@ -83,6 +89,7 @@ namespace CvsBallVision
         double exposureTime;
         double gain;
         double fps;
+        double gamma;
         std::string pixelFormat;
     };
 
@@ -142,6 +149,14 @@ namespace CvsBallVision
         bool GetFrameRate(double& fps);
         bool GetFrameRateRange(double& min, double& max);
 
+        // Gamma control
+        bool SetGamma(double gamma);
+        bool GetGamma(double& gamma);
+        bool GetGammaRange(double& min, double& max);
+        bool IsGammaSupported();
+        void SetSoftwareGammaEnabled(bool enable);
+        bool IsSoftwareGammaEnabled();
+
         bool SetPixelFormat(const std::string& format);
         std::string GetPixelFormat();
         std::vector<std::string> GetAvailablePixelFormats();
@@ -184,4 +199,6 @@ namespace CvsBallVision
     CVSBALLVISION_API bool ConvertBayerToRGB(const uint8_t* pSrc, uint8_t* pDst,
         int width, int height,
         const std::string& bayerPattern);
+    CVSBALLVISION_API bool ApplyGammaCorrection(uint8_t* pData, int width, int height,
+        int channels, double gamma);
 }

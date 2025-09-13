@@ -24,19 +24,24 @@
 #define IDC_EDIT_EXPOSURE               1022
 #define IDC_EDIT_GAIN                   1023
 #define IDC_EDIT_FPS                    1024
+#define IDC_EDIT_GAMMA                  1025
 
 #define IDC_SLIDER_EXPOSURE             1030
 #define IDC_SLIDER_GAIN                 1031
 #define IDC_SLIDER_FPS                  1032
+#define IDC_SLIDER_GAMMA                1033
 
 #define IDC_STATIC_EXPOSURE_VALUE       1040
 #define IDC_STATIC_GAIN_VALUE           1041
 #define IDC_STATIC_FPS_VALUE            1042
+#define IDC_STATIC_GAMMA_VALUE          1043
 
 // Settings Controls
 #define IDC_BUTTON_APPLY_SETTINGS       1050
 #define IDC_BUTTON_SAVE_SETTINGS        1051
 #define IDC_BUTTON_LOAD_SETTINGS        1052
+
+#define IDC_CHECK_SOFTWARE_GAMMA        1053
 
 // Display and Status
 #define IDC_STATIC_VIDEO                1060

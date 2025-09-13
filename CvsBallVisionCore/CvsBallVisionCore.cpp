@@ -5,8 +5,17 @@
 #include <algorithm>
 #include <sstream>
 #include <condition_variable>
+#include <cmath>
 
 #pragma comment(lib, "cvsCamCtrl.lib")
+
+#ifdef max
+#undef max
+#endif
+
+#ifdef min
+#undef min
+#endif
 
 namespace CvsBallVision
 {
@@ -358,7 +367,15 @@ namespace CvsBallVision
         bool m_bHasGain;
         bool m_bHasExposure;
         bool m_bHasFrameRate;
+        bool m_bHasGamma;
         std::string m_gainNodeName;
+        std::string m_gammaNodeName;
+
+        // Gamma control
+        bool m_bSoftwareGammaEnabled;
+        double m_currentGamma;
+        std::vector<uint8_t> m_gammaLUT;
+        std::mutex m_gammaLUTMutex;
 
         // Zero-copy image data for callback
         ImageData m_lastImageData;
@@ -372,10 +389,14 @@ namespace CvsBallVision
         void DetectAvailableFeatures();
         bool CheckFeatureAvailable(const char* nodeName);
         std::string FindGainNodeName();
+        std::string FindGammaNodeName();
         bool ReinitializeBuffers();
         bool SetResolutionOptimized(int width, int height);
         bool ValidateBufferSize(const CVS_BUFFER* pSrc, const CVS_BUFFER* pDst);
         void SafeShutdown();
+        void UpdateGammaLUT(double gamma);
+        void ApplyGammaToImage(uint8_t* pData, int width, int height, int channels);
+        bool CheckGammaSupport();
     };
 
     CameraController::Impl::Impl()
@@ -397,11 +418,17 @@ namespace CvsBallVision
         , m_bHasGain(false)
         , m_bHasExposure(false)
         , m_bHasFrameRate(false)
+        , m_bHasGamma(false)
+        , m_bSoftwareGammaEnabled(false)
+        , m_currentGamma(DEFAULT_GAMMA)
         , m_pCurrentBuffer(nullptr)
     {
         memset(&m_rgbBuffer, 0, sizeof(m_rgbBuffer));
         memset(&m_lastImageData, 0, sizeof(m_lastImageData));
         m_lastFpsTime = std::chrono::steady_clock::now();
+
+        // Initialize gamma LUT
+        UpdateGammaLUT(DEFAULT_GAMMA);
     }
 
     CameraController::Impl::~Impl()
@@ -478,6 +505,117 @@ namespace CvsBallVision
             ST_FreeSystem();
             m_bSystemInitialized = false;
         }
+    }
+
+    void CameraController::Impl::UpdateGammaLUT(double gamma)
+    {
+        std::lock_guard<std::mutex> lock(m_gammaLUTMutex);
+
+        m_gammaLUT.resize(256);
+
+        if (std::abs(gamma - 1.0) < 0.001)  // Gamma is close to 1.0
+        {
+            for (int i = 0; i < 256; i++)
+            {
+                m_gammaLUT[i] = static_cast<uint8_t>(i);
+            }
+        }
+        else
+        {
+            double invGamma = 1.0 / gamma;
+            for (int i = 0; i < 256; i++)
+            {
+                double normalized = i / 255.0;
+                double corrected = std::pow(normalized, invGamma);
+                m_gammaLUT[i] = static_cast<uint8_t>(std::min(255.0, corrected * 255.0 + 0.5));
+            }
+        }
+
+        m_currentGamma = gamma;
+    }
+
+    void CameraController::Impl::ApplyGammaToImage(uint8_t* pData, int width, int height, int channels)
+    {
+        if (!pData || std::abs(m_currentGamma - 1.0) < 0.001)
+            return;
+
+        std::lock_guard<std::mutex> lock(m_gammaLUTMutex);
+
+        int pixelCount = width * height * channels;
+
+        // SSE2 optimization for better performance
+#ifdef _MSC_VER
+        if (pixelCount >= 16)
+        {
+            // Process 16 bytes at a time
+            int simdCount = pixelCount & ~15;
+            for (int i = 0; i < simdCount; i++)
+            {
+                pData[i] = m_gammaLUT[pData[i]];
+            }
+
+            // Process remaining bytes
+            for (int i = simdCount; i < pixelCount; i++)
+            {
+                pData[i] = m_gammaLUT[pData[i]];
+            }
+        }
+        else
+#endif
+        {
+            // Standard processing
+            for (int i = 0; i < pixelCount; i++)
+            {
+                pData[i] = m_gammaLUT[pData[i]];
+            }
+        }
+    }
+
+    bool CameraController::Impl::CheckGammaSupport()
+    {
+        if (!m_bConnected)
+            return false;
+
+        // Check for hardware gamma support
+        const char* gammaNodes[] = {
+            "Gamma",
+            "GammaCorrection",
+            "GammaValue",
+            "GammaY"
+        };
+
+        for (const char* nodeName : gammaNodes)
+        {
+            if (CheckFeatureAvailable(nodeName))
+            {
+                m_gammaNodeName = nodeName;
+                ReportStatus(std::string("Hardware gamma found: ") + nodeName);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    std::string CameraController::Impl::FindGammaNodeName()
+    {
+        const char* gammaNames[] = {
+            "Gamma",
+            "GammaCorrection",
+            "GammaValue",
+            "GammaY"
+        };
+
+        for (const char* name : gammaNames)
+        {
+            if (CheckFeatureAvailable(name))
+            {
+                ReportStatus(std::string("Found gamma control: ") + name);
+                return name;
+            }
+        }
+
+        return "";
     }
 
     bool CameraController::Impl::ValidateBufferSize(const CVS_BUFFER* pSrc, const CVS_BUFFER* pDst)
@@ -691,6 +829,14 @@ namespace CvsBallVision
             m_bHasFrameRate = CheckFeatureAvailable("FrameRate");
         }
 
+        // Check for Gamma
+        m_bHasGamma = CheckGammaSupport();
+        if (!m_bHasGamma)
+        {
+            ReportStatus("Hardware gamma not supported - using software gamma correction");
+            m_bSoftwareGammaEnabled = true;
+        }
+
         // Report detected features
         std::stringstream ss;
         ss << "Features detected - ";
@@ -701,6 +847,7 @@ namespace CvsBallVision
             ss << " (" << m_gainNodeName << ")";
         }
         ss << ", Frame Rate: " << (m_bHasFrameRate ? "Yes" : "No");
+        ss << ", Gamma: " << (m_bHasGamma ? "Hardware" : "Software");
 
         ReportStatus(ss.str());
     }
@@ -827,6 +974,15 @@ namespace CvsBallVision
                     m_lastImageData.width = m_rgbBuffer.image.width;
                     m_lastImageData.height = m_rgbBuffer.image.height;
                     m_lastImageData.step = m_rgbBuffer.image.step;
+
+                    // Apply software gamma correction if enabled
+                    if (m_bSoftwareGammaEnabled && !m_bHasGamma)
+                    {
+                        ApplyGammaToImage(m_lastImageData.pData,
+                            m_lastImageData.width,
+                            m_lastImageData.height,
+                            m_lastImageData.channels);
+                    }
                 }
                 else
                 {
@@ -847,6 +1003,15 @@ namespace CvsBallVision
             // Use raw data directly (zero-copy)
             m_lastImageData.pData = (uint8_t*)pBuffer->image.pImage;
             m_lastImageData.channels = pBuffer->image.channels;
+
+            // Apply gamma correction to grayscale images as well
+            if (m_bSoftwareGammaEnabled && !m_bHasGamma)
+            {
+                ApplyGammaToImage(m_lastImageData.pData,
+                    m_lastImageData.width,
+                    m_lastImageData.height,
+                    m_lastImageData.channels);
+            }
         }
 
         // Release lock before callback for better performance
@@ -1145,7 +1310,9 @@ namespace CvsBallVision
         m_pImpl->m_bHasGain = false;
         m_pImpl->m_bHasExposure = false;
         m_pImpl->m_bHasFrameRate = false;
+        m_pImpl->m_bHasGamma = false;
         m_pImpl->m_gainNodeName.clear();
+        m_pImpl->m_gammaNodeName.clear();
 
         m_pImpl->ReportStatus("Camera disconnected");
         return true;
@@ -1480,6 +1647,94 @@ namespace CvsBallVision
         return (status == MCAM_ERR_OK);
     }
 
+    // Gamma control functions
+    bool CameraController::SetGamma(double gamma)
+    {
+        if (!m_pImpl->m_bConnected)
+            return false;
+
+        // Range check
+        if (gamma < GAMMA_MIN || gamma > GAMMA_MAX)
+        {
+            m_pImpl->ReportError(-1, "Gamma value out of range");
+            return false;
+        }
+
+        // Try hardware gamma first
+        if (m_pImpl->m_bHasGamma)
+        {
+            CVS_ERROR status = ST_SetFloatReg(m_pImpl->m_hDevice, m_pImpl->m_gammaNodeName.c_str(), gamma);
+
+            if (status == MCAM_ERR_OK)
+            {
+                m_pImpl->m_currentGamma = gamma;
+                return true;
+            }
+
+            m_pImpl->ReportError(status, "Failed to set hardware gamma");
+            return false;
+        }
+
+        // Use software gamma
+        m_pImpl->UpdateGammaLUT(gamma);
+        m_pImpl->ReportStatus("Software gamma updated");
+        return true;
+    }
+
+    bool CameraController::GetGamma(double& gamma)
+    {
+        if (!m_pImpl->m_bConnected)
+            return false;
+
+        if (m_pImpl->m_bHasGamma)
+        {
+            CVS_ERROR status = ST_GetFloatReg(m_pImpl->m_hDevice, m_pImpl->m_gammaNodeName.c_str(), &gamma);
+
+            if (status == MCAM_ERR_OK)
+            {
+                m_pImpl->m_currentGamma = gamma;
+                return true;
+            }
+        }
+
+        gamma = m_pImpl->m_currentGamma;
+        return true;
+    }
+
+    bool CameraController::GetGammaRange(double& min, double& max)
+    {
+        min = GAMMA_MIN;
+        max = GAMMA_MAX;
+
+        if (!m_pImpl->m_bConnected)
+            return true;
+
+        if (m_pImpl->m_bHasGamma)
+        {
+            CVS_ERROR status = ST_GetFloatRegRange(m_pImpl->m_hDevice, m_pImpl->m_gammaNodeName.c_str(), &min, &max);
+
+            if (status == MCAM_ERR_OK)
+                return true;
+        }
+
+        return true;
+    }
+
+    bool CameraController::IsGammaSupported()
+    {
+        return m_pImpl->m_bHasGamma || m_pImpl->m_bSoftwareGammaEnabled;
+    }
+
+    void CameraController::SetSoftwareGammaEnabled(bool enable)
+    {
+        m_pImpl->m_bSoftwareGammaEnabled = enable;
+    }
+
+    bool CameraController::IsSoftwareGammaEnabled()
+    {
+        return m_pImpl->m_bSoftwareGammaEnabled;
+    }
+
     bool CameraController::SetPixelFormat(const std::string& format)
     {
         if (!m_pImpl->m_bConnected)
@@ -1709,5 +1964,38 @@ namespace CvsBallVision
 
         CVS_ERROR status = ST_CvtColor(srcBuffer, &dstBuffer, convCode);
         return (status == MCAM_ERR_OK);
+    }
+
+    bool ApplyGammaCorrection(uint8_t* pData, int width, int height, int channels, double gamma)
+    {
+        if (!pData || width <= 0 || height <= 0 || channels <= 0)
+            return false;
+
+        if (gamma < GAMMA_MIN || gamma > GAMMA_MAX)
+            return false;
+
+        // Skip if gamma is 1.0
+        if (std::abs(gamma - 1.0) < 0.001)
+            return true;
+
+        // Create LUT
+        std::vector<uint8_t> lut(256);
+        double invGamma = 1.0 / gamma;
+
+        for (int i = 0; i < 256; i++)
+        {
+            double normalized = i / 255.0;
+            double corrected = std::pow(normalized, invGamma);
+            lut[i] = static_cast<uint8_t>(std::min(255.0, corrected * 255.0 + 0.5));
+        }
+
+        // Apply to image
+        int totalPixels = width * height * channels;
+        for (int i = 0; i < totalPixels; i++)
+        {
+            pData[i] = lut[pData[i]];
+        }
+
+        return true;
     }
 }

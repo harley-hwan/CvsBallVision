@@ -48,6 +48,7 @@ protected:
     afx_msg void OnPaint();
     afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
     afx_msg void OnDestroy();
+    afx_msg void OnBnClickedCheckSoftwareGamma();
     afx_msg LRESULT OnImageReceived(WPARAM wParam, LPARAM lParam);
     afx_msg LRESULT OnConnectionComplete(WPARAM wParam, LPARAM lParam);
     afx_msg LRESULT OnAsyncOperationComplete(WPARAM wParam, LPARAM lParam);
@@ -103,14 +104,19 @@ private:
     CEdit m_editExposure;
     CEdit m_editGain;
     CEdit m_editFps;
+    CEdit m_editGamma;
 
     CSliderCtrl m_sliderExposure;
     CSliderCtrl m_sliderGain;
     CSliderCtrl m_sliderFps;
+    CSliderCtrl m_sliderGamma;
 
     CStatic m_staticExposureValue;
     CStatic m_staticGainValue;
     CStatic m_staticFpsValue;
+    CStatic m_staticGammaValue;
+
+    CButton m_checkSoftwareGamma;
 
     // Timer ID
     static const UINT_PTR TIMER_UPDATE_UI = 1;

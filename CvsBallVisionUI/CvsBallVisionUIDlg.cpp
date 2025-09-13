@@ -113,14 +113,19 @@ void CvsBallVisionUIDlg::DoDataExchange(CDataExchange* pDX)
     DDX_Control(pDX, IDC_EDIT_EXPOSURE, m_editExposure);
     DDX_Control(pDX, IDC_EDIT_GAIN, m_editGain);
     DDX_Control(pDX, IDC_EDIT_FPS, m_editFps);
+    DDX_Control(pDX, IDC_EDIT_GAMMA, m_editGamma);
 
     DDX_Control(pDX, IDC_SLIDER_EXPOSURE, m_sliderExposure);
     DDX_Control(pDX, IDC_SLIDER_GAIN, m_sliderGain);
     DDX_Control(pDX, IDC_SLIDER_FPS, m_sliderFps);
+    DDX_Control(pDX, IDC_SLIDER_GAMMA, m_sliderGamma);
 
     DDX_Control(pDX, IDC_STATIC_EXPOSURE_VALUE, m_staticExposureValue);
     DDX_Control(pDX, IDC_STATIC_GAIN_VALUE, m_staticGainValue);
     DDX_Control(pDX, IDC_STATIC_FPS_VALUE, m_staticFpsValue);
+    DDX_Control(pDX, IDC_STATIC_GAMMA_VALUE, m_staticGammaValue);
+
+    DDX_Control(pDX, IDC_CHECK_SOFTWARE_GAMMA, m_checkSoftwareGamma);
 }
 
 BEGIN_MESSAGE_MAP(CvsBallVisionUIDlg, CDialogEx)
@@ -132,6 +137,7 @@ BEGIN_MESSAGE_MAP(CvsBallVisionUIDlg, CDialogEx)
     ON_BN_CLICKED(IDC_BUTTON_APPLY_SETTINGS, &CvsBallVisionUIDlg::OnBnClickedButtonApplySettings)
     ON_BN_CLICKED(IDC_BUTTON_SAVE_SETTINGS, &CvsBallVisionUIDlg::OnBnClickedButtonSaveSettings)
     ON_BN_CLICKED(IDC_BUTTON_LOAD_SETTINGS, &CvsBallVisionUIDlg::OnBnClickedButtonLoadSettings)
+    ON_BN_CLICKED(IDC_CHECK_SOFTWARE_GAMMA, &CvsBallVisionUIDlg::OnBnClickedCheckSoftwareGamma)
     ON_CBN_SELCHANGE(IDC_COMBO_CAMERA_LIST, &CvsBallVisionUIDlg::OnCbnSelchangeComboCameraList)
     ON_WM_HSCROLL()
     ON_WM_TIMER()
@@ -170,6 +176,9 @@ BOOL CvsBallVisionUIDlg::OnInitDialog()
     str.Format(_T("%.0f"), DEFAULT_FPS);
     m_editFps.SetWindowText(str);
 
+    str.Format(_T("%.2f"), DEFAULT_GAMMA);
+    m_editGamma.SetWindowText(str);
+
     // Initialize sliders
     m_sliderExposure.SetRange(100, 100000);
     m_sliderExposure.SetPos(static_cast<int>(DEFAULT_EXPOSURE_US));
@@ -177,6 +186,10 @@ BOOL CvsBallVisionUIDlg::OnInitDialog()
     m_sliderGain.SetPos(static_cast<int>(DEFAULT_GAIN_DB * 10));
     m_sliderFps.SetRange(1, 200);
     m_sliderFps.SetPos(static_cast<int>(DEFAULT_FPS));
+
+    // Initialize gamma slider (0.1 ~ 3.0 mapped to 10 ~ 300)
+    m_sliderGamma.SetRange(10, 300);
+    m_sliderGamma.SetPos(static_cast<int>(DEFAULT_GAMMA * 100));
 
     // Update slider value displays
     str.Format(_T("%.0f ¥ìs"), DEFAULT_EXPOSURE_US);
@@ -187,6 +200,9 @@ BOOL CvsBallVisionUIDlg::OnInitDialog()
 
     str.Format(_T("%.0f fps"), DEFAULT_FPS);
     m_staticFpsValue.SetWindowText(str);
+
+    str.Format(_T("%.2f"), DEFAULT_GAMMA);
+    m_staticGammaValue.SetWindowText(str);
 
     // Create memory DC for image display
     CreateMemoryDC();
@@ -324,12 +340,15 @@ void CvsBallVisionUIDlg::UpdateUIState()
     m_editExposure.EnableWindow(bConnected && !bAsyncOperation);
     m_editGain.EnableWindow(bConnected && !bAsyncOperation);
     m_editFps.EnableWindow(bConnected && !bAsyncOperation);
+    m_editGamma.EnableWindow(bConnected && !bAsyncOperation);
 
     m_sliderExposure.EnableWindow(bConnected && !bAsyncOperation);
     m_sliderGain.EnableWindow(bConnected && !bAsyncOperation);
     m_sliderFps.EnableWindow(bConnected && !bAsyncOperation);
+    m_sliderGamma.EnableWindow(bConnected && !bAsyncOperation);
 
     m_comboCameraList.EnableWindow(!bConnected && !bAsyncOperation);
+    m_checkSoftwareGamma.EnableWindow(bConnected && !bAsyncOperation);
 }
 
 void CvsBallVisionUIDlg::UpdateStatistics()
@@ -374,6 +393,16 @@ void CvsBallVisionUIDlg::UpdateParameterRanges()
     {
         m_sliderFps.SetRange(static_cast<int>(min), static_cast<int>(max));
     }
+
+    // Update gamma range
+    if (m_pCamera->GetGammaRange(min, max))
+    {
+        m_sliderGamma.SetRange(static_cast<int>(min * 100), static_cast<int>(max * 100));
+    }
+
+    // Set software gamma checkbox state
+    bool isHardwareGamma = m_pCamera->IsGammaSupported() && !m_pCamera->IsSoftwareGammaEnabled();
+    m_checkSoftwareGamma.SetCheck(!isHardwareGamma ? BST_CHECKED : BST_UNCHECKED);
 }
 
 void CvsBallVisionUIDlg::UpdateParameterValues()
@@ -415,6 +444,15 @@ void CvsBallVisionUIDlg::UpdateParameterValues()
 
         str.Format(_T("%.0f fps"), value);
         m_staticFpsValue.SetWindowText(str);
+    }
+
+    // Update gamma
+    if (m_pCamera->GetGamma(value))
+    {
+        str.Format(_T("%.2f"), value);
+        m_editGamma.SetWindowText(str);
+        m_sliderGamma.SetPos(static_cast<int>(value * 100));
+        m_staticGammaValue.SetWindowText(str);
     }
 
     // Update resolution
@@ -471,6 +509,18 @@ void CvsBallVisionUIDlg::ApplySettings()
     {
         m_pCamera->SetFrameRate(fps);
     }
+
+    // Apply gamma
+    m_editGamma.GetWindowText(str);
+    double gamma = _ttof(str);
+    if (gamma >= 0.1 && gamma <= 3.0)
+    {
+        m_pCamera->SetGamma(gamma);
+    }
+
+    // Apply software gamma setting
+    bool useSoftwareGamma = (m_checkSoftwareGamma.GetCheck() == BST_CHECKED);
+    m_pCamera->SetSoftwareGammaEnabled(useSoftwareGamma);
 
     UpdateParameterValues();
 }
@@ -707,7 +757,12 @@ void CvsBallVisionUIDlg::ApplySettingsAsync()
     m_editFps.GetWindowText(str);
     double fps = _ttof(str);
 
-    m_asyncThread = std::thread([this, width, height, exposure, gain, fps]() {
+    m_editGamma.GetWindowText(str);
+    double gamma = _ttof(str);
+
+    bool useSoftwareGamma = (m_checkSoftwareGamma.GetCheck() == BST_CHECKED);
+
+    m_asyncThread = std::thread([this, width, height, exposure, gain, fps, gamma, useSoftwareGamma]() {
         bool success = true;
 
         if (m_pCamera && m_pCamera->IsConnected())
@@ -723,6 +778,11 @@ void CvsBallVisionUIDlg::ApplySettingsAsync()
 
             if (fps > 0)
                 success &= m_pCamera->SetFrameRate(fps);
+
+            if (gamma >= 0.1 && gamma <= 3.0)
+                success &= m_pCamera->SetGamma(gamma);
+
+            m_pCamera->SetSoftwareGammaEnabled(useSoftwareGamma);
         }
 
         PostMessage(WM_ASYNC_OPERATION_COMPLETE, static_cast<WPARAM>(success), 2);
@@ -826,6 +886,24 @@ void CvsBallVisionUIDlg::OnBnClickedButtonLoadSettings()
     }
 }
 
+void CvsBallVisionUIDlg::OnBnClickedCheckSoftwareGamma()
+{
+    if (m_pCamera && m_pCamera->IsConnected())
+    {
+        bool useSoftwareGamma = (m_checkSoftwareGamma.GetCheck() == BST_CHECKED);
+        m_pCamera->SetSoftwareGammaEnabled(useSoftwareGamma);
+
+        // Reapply current gamma value
+        CString str;
+        m_editGamma.GetWindowText(str);
+        double gamma = _ttof(str);
+        if (gamma >= 0.1 && gamma <= 3.0)
+        {
+            m_pCamera->SetGamma(gamma);
+        }
+    }
+}
+
 void CvsBallVisionUIDlg::OnCbnSelchangeComboCameraList()
 {
     // Camera selection changed
@@ -875,6 +953,15 @@ void CvsBallVisionUIDlg::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollB
 
         str.Format(_T("%.0f fps"), fps);
         m_staticFpsValue.SetWindowText(str);
+    }
+    else if (pSlider == &m_sliderGamma)
+    {
+        double gamma = pos / 100.0;
+        m_pCamera->SetGamma(gamma);
+
+        str.Format(_T("%.2f"), gamma);
+        m_editGamma.SetWindowText(str);
+        m_staticGammaValue.SetWindowText(str);
     }
 
     CDialogEx::OnHScroll(nSBCode, nPos, pScrollBar);
